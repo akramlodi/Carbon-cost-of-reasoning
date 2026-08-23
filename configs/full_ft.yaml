@@ -24,13 +24,11 @@ model_id: google/gemma-4-E2B-it
 
 # Substring match against each parameter's full dotted name in
 # model.named_parameters() -- any match freezes that parameter. CONFIRMED
-# via scripts/check_full_ft_scope.py, but against google/gemma-4-E2B (the
-# base checkpoint) -- model_id below was switched to the -it variant
-# afterward, and these patterns have NOT been re-verified against it yet.
-# "-it" checkpoints are normally the same architecture with different
-# weights, so this should carry over unchanged, but re-run
-# check_full_ft_scope.py once against -it before trusting this on the A100
-# (cheap, T4, no training involved -- see CHANGES.md for the original run):
+# via scripts/check_full_ft_scope.py against BOTH google/gemma-4-E2B (base)
+# and google/gemma-4-E2B-it (the checkpoint actually used below) -- both
+# runs produced identical parameter names, counts, and the same 36.78%
+# trainable ratio, confirming -it is the same architecture with different
+# weights, as expected. Not a guess:
 #   vision_tower  -> model.vision_tower.*            (vision encoder)
 #   embed_vision  -> model.embed_vision.*            (vision->text fusion projection)
 #   audio_tower   -> model.audio_tower.*             (audio encoder)
@@ -48,12 +46,12 @@ model_id: google/gemma-4-E2B-it
 #        in-layer projection), not a static embedding lookup, so they're
 #        treated as backbone rather than embedder.
 #
-# There is no separate speculative-decoding drafter module in the base
-# checkpoint -- confirmed via a full-name keyword scan, not just absent
-# from a truncated listing. (Not yet re-confirmed on -it; see above.)
+# There is no separate speculative-decoding drafter module in this
+# checkpoint -- confirmed via a full-name keyword scan (on both base and
+# -it), not just absent from a truncated listing.
 #
-# Result on the base checkpoint: 1,877,105,920 / 5,104,297,504 trainable
-# (~36.78%), matching CHANGES.md's ~1.87B/5.1B backbone estimate closely.
+# Result (identical on both checkpoints): 1,877,105,920 / 5,104,297,504
+# trainable (~36.78%), matching CHANGES.md's ~1.87B/5.1B backbone estimate.
 frozen_modules:
   - vision_tower
   - embed_vision
