@@ -23,24 +23,38 @@ method: full_ft
 model_id: google/gemma-4-E2B
 
 # Substring match against each parameter's full dotted name in
-# model.named_parameters() -- any match freezes that parameter. These are
-# BEST-GUESS prefixes based on common HF naming conventions and the one
-# path confirmed from an actual traceback (`language_model.layers.N...`,
-# which is deliberately NOT listed here since it's the backbone we want
-# trainable). Before the first real Full FT run, verify these against the
-# actual loaded checkpoint:
-#   [n for n, _ in model.named_parameters()]
-# and adjust this list -- no code changes needed, see src/models.py's
-# load_model() for how this list is consumed.
+# model.named_parameters() -- any match freezes that parameter. CONFIRMED
+# against the real checkpoint via scripts/check_full_ft_scope.py (not a
+# guess anymore -- see CHANGES.md for the verification run):
+#   vision_tower  -> model.vision_tower.*            (vision encoder)
+#   embed_vision  -> model.embed_vision.*            (vision->text fusion projection)
+#   audio_tower   -> model.audio_tower.*             (audio encoder)
+#   embed_audio   -> model.embed_audio.*             (audio->text fusion projection)
+#   embed_tokens  -> model.language_model.embed_tokens
+#                    and .embed_tokens_per_layer      (main + Per-Layer Embedding tables)
+#
+# Deliberately NOT frozen (stays trainable, part of the language backbone):
+#   model.language_model.layers                  -- attention + MLP transformer blocks
+#   model.language_model.norm                    -- final backbone layer norm
+#   model.language_model.per_layer_model_projection
+#   model.language_model.per_layer_projection_norm
+#     -- these two integrate the per-layer embedding into each transformer
+#        layer's forward pass; that's backbone computation (like any other
+#        in-layer projection), not a static embedding lookup, so they're
+#        treated as backbone rather than embedder.
+#
+# There is no separate speculative-decoding drafter module in this
+# checkpoint (google/gemma-4-E2B, base non-"-it" variant) -- confirmed via
+# a full-name keyword scan, not just absent from a truncated listing.
+#
+# Result: 1,877,105,920 / 5,104,297,504 trainable (~36.78%), matching
+# CHANGES.md's ~1.87B/5.1B backbone estimate closely.
 frozen_modules:
   - vision_tower
-  - vision_encoder
+  - embed_vision
   - audio_tower
-  - audio_encoder
-  - drafter
+  - embed_audio
   - embed_tokens
-  - embedder
-  - per_layer
 
 seed: 42
 epochs: 3
