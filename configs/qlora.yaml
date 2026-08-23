@@ -27,4 +27,6 @@ lora:
   r: 16
   alpha: 32
   dropout: 0.05
-  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  # target_modules intentionally omitted -- see configs/lora.yaml and
+  # src/models.py::load_model. Same reasoning applies under 4-bit
+  # quantization (Linear4bit is also wrapped in Gemma4ClippableLinear).

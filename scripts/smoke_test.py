@@ -38,7 +38,8 @@ def build_smoke_config(method):
             "r": 8,
             "alpha": 16,
             "dropout": 0.05,
-            "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
+            # no target_modules -- let peft>=0.19's Gemma-4-aware defaults
+            # pick the right modules; see src/models.py::load_model.
         },
     }
 

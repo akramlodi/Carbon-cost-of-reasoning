@@ -25,4 +25,8 @@ lora:
   r: 16
   alpha: 32
   dropout: 0.05
-  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  # target_modules intentionally omitted -- peft>=0.19's Gemma-4-aware
+  # defaults correctly target the LM attention + MLP projections while
+  # avoiding the Gemma4ClippableLinear-wrapped vision/audio modules.
+  # See src/models.py::load_model for why an explicit list breaks LoRA
+  # injection on this architecture.
