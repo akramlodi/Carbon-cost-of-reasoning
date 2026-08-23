@@ -1,5 +1,6 @@
 transformers>=4.45
 peft>=0.19          # <0.19 can't LoRA-wrap gemma-4's Gemma4ClippableLinear (huggingface/peft#3129)
+torchao>=0.16       # peft>=0.19 probes torchao on every LoRA injection and hard-errors if an older one is present, even unused
 bitsandbytes>=0.44
 accelerate>=1.0
 datasets>=3.0

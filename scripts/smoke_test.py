@@ -8,6 +8,7 @@ mismatches, CodeCarbon init failures, checkpoint save/reload) before any
 money is spent on a rented GPU.
 """
 import argparse
+import gc
 import os
 import sys
 
@@ -20,6 +21,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import torch
 from peft import PeftModel
 from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
 
@@ -101,6 +103,18 @@ def run_smoke_test(method="qlora"):
     print("[6/6] Sanity-checking adapter save/reload...")
     adapter_dir = "smoke_test_adapter"
     model.save_pretrained(adapter_dir)
+
+    # Free the first model before loading a second copy -- otherwise
+    # device_map="auto" has to offload part of the reload onto CPU/disk to
+    # fit both copies at once, and peft has a bug loading an adapter onto a
+    # partially-offloaded base model (KeyError on a *_norm submodule during
+    # its offload-index bookkeeping). Loading straight onto a freshly-freed
+    # GPU sidesteps that entirely.
+    del trainer, model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     reload_base = load_model({**config, "lora": {"enabled": False}})
     reloaded = PeftModel.from_pretrained(reload_base, adapter_dir)
     del reloaded
