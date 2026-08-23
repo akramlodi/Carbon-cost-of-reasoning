@@ -106,6 +106,27 @@ def append_record(records_path, record):
         f.write(json.dumps(record) + "\n")
 
 
+def warn_if_not_symlinked(records_path):
+    """`ln -s SOURCE DEST` silently creates the link *inside* DEST instead
+    of replacing it if DEST already exists as a real directory -- which
+    `results/` does here, since it's tracked in this repo. That means a
+    Drive-mount symlink setup can "succeed" (no error) while every write
+    still goes to /content/'s ephemeral local disk, invisible until a Colab
+    disconnect wipes it. Warn loudly up front rather than discover this
+    after losing hours of generation."""
+    parent = os.path.dirname(records_path) or "."
+    if os.path.isdir(parent) and not os.path.islink(parent):
+        print(
+            f"WARNING: {parent}/ is a plain local directory, not a symlink. On Colab, "
+            f"/content/ is wiped on every disconnect -- if you intended {parent}/ to "
+            f"point at Drive (or other persistent storage), your symlink setup didn't "
+            f"take (commonly because {parent}/ already existed, so `ln -s` linked "
+            f"*inside* it instead of replacing it). Verify with "
+            f"`ls -la {parent}` (look for '->') before a long run, or everything "
+            f"written this session is lost on the next disconnect."
+        )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_eval_samples", type=int, default=None, help="Subset size; omit for the full 1,319-example test set")
@@ -114,6 +135,8 @@ def main():
     parser.add_argument("--records_path", default=RECORDS_PATH_DEFAULT, help="Per-example JSONL checkpoint file")
     parser.add_argument("--restart", action="store_true", help="Wipe --records_path and start over instead of resuming")
     args = parser.parse_args()
+
+    warn_if_not_symlinked(args.records_path)
 
     if os.path.dirname(args.records_path):
         os.makedirs(os.path.dirname(args.records_path), exist_ok=True)
