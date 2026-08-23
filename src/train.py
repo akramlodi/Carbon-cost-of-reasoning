@@ -107,8 +107,8 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
     tokenizer = load_tokenizer(config["model_id"])
     model = load_model(config)
 
-    train_ds = load_gsm8k("train", n_samples=n_train_samples)
-    eval_ds = load_gsm8k("test", n_samples=n_eval_samples)
+    train_ds = load_gsm8k(tokenizer, "train", n_samples=n_train_samples)
+    eval_ds = load_gsm8k(tokenizer, "test", n_samples=n_eval_samples)
     tokenized_train = tokenize_dataset(train_ds, tokenizer, config.get("max_seq_length", 512))
 
     training_args = build_training_args(config, run_output_dir)

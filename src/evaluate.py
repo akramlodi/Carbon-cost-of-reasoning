@@ -34,7 +34,10 @@ def answers_match(pred, ref, tol=1e-4):
 
 @torch.no_grad()
 def generate_answer(model, tokenizer, prompt, max_new_tokens=256):
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    # add_special_tokens=False: prompt already went through the tokenizer's
+    # chat template (see src.data.format_example), which embeds BOS/turn
+    # tokens itself -- re-adding them here would duplicate BOS.
+    inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
     output_ids = model.generate(
         **inputs,
         max_new_tokens=max_new_tokens,

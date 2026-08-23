@@ -2,7 +2,7 @@
 # Same adapter config as configs/lora.yaml for direct comparability.
 # Rank ablation (r=8, r=32) is applied at runtime via `--rank`.
 method: qlora
-model_id: google/gemma-4-E2B
+model_id: google/gemma-4-E2B-it
 
 seed: 42
 epochs: 3

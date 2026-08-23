@@ -1,9 +1,10 @@
 """Diagnostic-only check for the Full FT frozen_modules scope in
 configs/full_ft.yaml.
 
-Loads google/gemma-4-E2B in bf16 (no quantization, no LoRA -- the exact Full
-FT load path), applies the freeze via the real src.models.load_model() code
-path, and reports which frozen_modules patterns actually matched real
+Loads configs/full_ft.yaml's model_id (google/gemma-4-E2B-it) in bf16 (no
+quantization, no LoRA -- the exact Full FT load path), applies the freeze
+via the real src.models.load_model() code path, and reports which
+frozen_modules patterns actually matched real
 parameter names and how many elements each froze. Runs NO training steps,
 so it's safe on a free T4 even though a real Full FT training run isn't
 (see README) -- this only needs to load the model once.

@@ -30,7 +30,7 @@ from src.data import load_gsm8k
 from src.evaluate import evaluate_model
 from src.models import load_model, load_tokenizer
 
-MODEL_ID = "google/gemma-4-E2B"
+MODEL_ID = "google/gemma-4-E2B-it"
 OUT_PATH = "results/baseline_accuracy.json"
 
 
@@ -46,7 +46,7 @@ def main():
     tokenizer = load_tokenizer(config["model_id"])
     model = load_model(config)
 
-    eval_ds = load_gsm8k("test", n_samples=args.n_eval_samples)
+    eval_ds = load_gsm8k(tokenizer, "test", n_samples=args.n_eval_samples)
     print(f"Evaluating zero-shot on {len(eval_ds)} GSM8K test examples...")
 
     accuracy, records = evaluate_model(

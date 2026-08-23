@@ -4,7 +4,7 @@
 
 This project measures the environmental cost — energy consumption (kWh) and CO2 emissions — of three fine-tuning methodologies applied to a small reasoning-capable language model, and weighs that cost against the accuracy gained on a multi-step mathematical reasoning benchmark.
 
-**Base model:** `google/gemma-4-E2B` (2.3B effective parameters, Apache 2.0)
+**Base model:** `google/gemma-4-E2B-it` (instruction-tuned; 2.3B effective parameters, Apache 2.0)
 **Benchmark:** GSM8K (grade-school math word problems requiring chain-of-thought reasoning)
 **Methods compared:** Full Fine-Tuning, LoRA, QLoRA
 
@@ -106,12 +106,12 @@ pyyaml
 - Test split: ~1,319 examples
 - Format: question + step-by-step solution ending in `#### <final_numeric_answer>`
 
-**Prompt template** (chain-of-thought, consistent across all three methods):
+**Prompt template** (chain-of-thought, consistent across all three methods): the instruction text below is sent as a single user turn through the tokenizer's chat template (`google/gemma-4-E2B-it` is instruction-tuned and expects its own turn-formatted input, not a raw completion-style string):
 ```
 Question: {question}
 Answer: Let's think step by step.
 ```
-Target: the reference solution text, ending in the `####` answer marker.
+Target: an assistant turn containing the reference solution text, ending in the `####` answer marker (see `src/data.py::format_example`, which builds both the eval-time prompt and the training-time full text via `tokenizer.apply_chat_template`).
 
 ---
 
@@ -125,7 +125,7 @@ Target: the reference solution text, ending in the `####` answer marker.
 - Mixed precision: bf16 throughout
 
 ### Condition A — Full Fine-Tuning
-- Only the language-model transformer backbone (attention + MLP layers, ~1.87B params) is trainable. `google/gemma-4-E2B` loads as 5.1B raw parameters, not the "2.3B effective" marketing figure; the gap is the embedder (incl. Per-Layer Embeddings, ~2.74B), audio encoder (305M), vision encoder (150M), and speculative-decoding drafter (76M), all of which are **frozen** for this condition (see `configs/full_ft.yaml`'s `frozen_modules`).
+- Only the language-model transformer backbone (attention + MLP layers, ~1.88B params) is trainable. `google/gemma-4-E2B-it` loads as ~5.1B raw parameters, not the "2.3B effective" marketing figure; the gap is the embedder (incl. Per-Layer Embeddings), audio encoder, and vision encoder, all of which are **frozen** for this condition (see `configs/full_ft.yaml`'s `frozen_modules`, verified against the real checkpoint via `scripts/check_full_ft_scope.py` — this checkpoint has no separate speculative-decoding drafter module).
   - Google freezes the audio/vision encoders during gemma-4's own pretraining, and GSM8K is text-only, so there's no gradient signal for them regardless.
   - LoRA/QLoRA (Conditions B/C) only adapt backbone attention/MLP projections and never touch the embedder — training the embedder here too would conflate "fine-tuning method" with "training scope" and undermine the cross-method comparison.
   - Reasoning ability lives in the backbone; GSM8K introduces no new vocabulary.
@@ -211,87 +211,10 @@ For every run, record: method, rank (if applicable), seed, GPU model, region, wa
 
 **What this smoke test does NOT validate:** real accuracy numbers, real energy numbers, or full fine-tuning (T4 cannot run it — expect and ignore the OOM if you try).
 
-```python
-# scripts/smoke_test.py
-# Run on free Colab (T4). Tests QLoRA and LoRA pipelines only.
-
-from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, TrainingArguments
-from peft import LoraConfig, get_peft_model
-from codecarbon import EmissionsTracker
-import torch
-
-MODEL_ID = "google/gemma-4-E2B"
-N_SMOKE_SAMPLES = 32     # tiny subset — just enough to run a few real steps
-N_SMOKE_STEPS = 10
-
-# 1. Data — tiny subset
-ds = load_dataset("openai/gsm8k", "main", split=f"train[:{N_SMOKE_SAMPLES}]")
-
-def format_example(ex):
-    return {
-        "text": f"Question: {ex['question']}\nAnswer: Let's think step by step.\n{ex['answer']}"
-    }
-
-ds = ds.map(format_example)
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
-
-def tokenize(ex):
-    return tokenizer(ex["text"], truncation=True, max_length=512, padding="max_length")
-
-tokenized = ds.map(tokenize, batched=True)
-
-# 2. Model — QLoRA config (safe for T4's 16GB)
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-)
-
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_ID,
-    quantization_config=bnb_config,
-    device_map="auto",
-)
-
-lora_config = LoraConfig(
-    r=8,
-    lora_alpha=16,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-    lora_dropout=0.05,
-    task_type="CAUSAL_LM",
-)
-model = get_peft_model(model, lora_config)
-model.print_trainable_parameters()  # sanity check: should be a small fraction
-
-# 3. Energy tracker — validate it runs end to end
-tracker = EmissionsTracker(project_name="green-gap-smoke-test", output_dir="results/emissions")
-tracker.start()
-
-# 4. Minimal training loop (a handful of steps, not a real epoch)
-from transformers import Trainer
-
-training_args = TrainingArguments(
-    output_dir="smoke_test_output",
-    per_device_train_batch_size=2,
-    max_steps=N_SMOKE_STEPS,
-    logging_steps=1,
-    save_strategy="no",
-    report_to="none",
-    bf16=True,
-)
-
-trainer = Trainer(model=model, args=training_args, train_dataset=tokenized)
-trainer.train()
-
-emissions_kg = tracker.stop()
-print(f"Smoke test complete. Estimated emissions: {emissions_kg} kg CO2e")
-
-# 5. Sanity check adapter save/reload
-model.save_pretrained("smoke_test_adapter")
-print("Adapter saved successfully. Smoke test PASSED if no exceptions were raised above.")
+The actual implementation lives in `scripts/smoke_test.py`, not inline here — it's picked up several fixes since this section was first drafted (chat-template prompting, dynamic per-batch padding, a `peft`-version-driven `target_modules` fix, T4 memory-fragmentation mitigations) that would just go stale if duplicated into this file as a second copy. Run it with:
+```bash
+python scripts/smoke_test.py --method qlora
+python scripts/smoke_test.py --method lora
 ```
 
 **Expected runtime on free T4:** a few minutes. If this fails, fix it before spending a cent on rented GPU time — every bug caught here saves real money later.

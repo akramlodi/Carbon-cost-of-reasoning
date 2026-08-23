@@ -30,7 +30,7 @@ from src.energy_tracker import EnergyRun
 from src.evaluate import evaluate_model, extract_final_answer
 from src.models import load_model, load_tokenizer
 
-MODEL_ID = "google/gemma-4-E2B"
+MODEL_ID = "google/gemma-4-E2B-it"
 N_SMOKE_SAMPLES = 32
 N_SMOKE_STEPS = 10
 N_EVAL_SAMPLES = 8
@@ -68,8 +68,8 @@ def run_smoke_test(method="qlora"):
     model = load_model(config)
 
     print("[2/6] Loading + tokenizing a tiny GSM8K subset...")
-    train_ds = load_gsm8k("train", n_samples=N_SMOKE_SAMPLES)
-    eval_ds = load_gsm8k("test", n_samples=N_EVAL_SAMPLES)
+    train_ds = load_gsm8k(tokenizer, "train", n_samples=N_SMOKE_SAMPLES)
+    eval_ds = load_gsm8k(tokenizer, "test", n_samples=N_EVAL_SAMPLES)
     tokenized_train = tokenize_dataset(train_ds, tokenizer, max_length=SMOKE_MAX_LENGTH)
 
     print("[3/6] Starting energy tracker...")
