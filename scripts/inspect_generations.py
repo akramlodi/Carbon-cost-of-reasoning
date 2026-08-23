@@ -50,7 +50,7 @@ def generate_and_decode(model, tokenizer, prompt, max_new_tokens=512):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_examples", type=int, default=5)
-    parser.add_argument("--max_new_tokens", type=int, default=256)
+    parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--split", default="test", choices=["train", "test"])
     args = parser.parse_args()
 
