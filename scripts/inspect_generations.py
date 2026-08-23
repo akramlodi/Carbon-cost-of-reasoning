@@ -29,7 +29,7 @@ MODEL_ID = "google/gemma-4-E2B-it"
 
 
 @torch.no_grad()
-def generate_and_decode(model, tokenizer, prompt, max_new_tokens=256):
+def generate_and_decode(model, tokenizer, prompt, max_new_tokens=512):
     # add_special_tokens=False: prompt already went through the tokenizer's
     # chat template, which embeds BOS/turn tokens itself.
     inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
