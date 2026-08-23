@@ -125,7 +125,11 @@ Target: the reference solution text, ending in the `####` answer marker.
 - Mixed precision: bf16 throughout
 
 ### Condition A — Full Fine-Tuning
-- All 2.3B parameters trainable
+- Only the language-model transformer backbone (attention + MLP layers, ~1.87B params) is trainable. `google/gemma-4-E2B` loads as 5.1B raw parameters, not the "2.3B effective" marketing figure; the gap is the embedder (incl. Per-Layer Embeddings, ~2.74B), audio encoder (305M), vision encoder (150M), and speculative-decoding drafter (76M), all of which are **frozen** for this condition (see `configs/full_ft.yaml`'s `frozen_modules`).
+  - Google freezes the audio/vision encoders during gemma-4's own pretraining, and GSM8K is text-only, so there's no gradient signal for them regardless.
+  - LoRA/QLoRA (Conditions B/C) only adapt backbone attention/MLP projections and never touch the embedder — training the embedder here too would conflate "fine-tuning method" with "training scope" and undermine the cross-method comparison.
+  - Reasoning ability lives in the backbone; GSM8K introduces no new vocabulary.
+  - Keeps optimizer-state memory within an A100 40GB budget instead of needing an 80GB card for all 5.1B raw params.
 - AdamW optimizer, fp32 master weights (or bf16 with loss scaling if memory-constrained)
 - Gradient checkpointing enabled to control memory
 

@@ -38,6 +38,29 @@ def _freeze_base_model(model, use_gradient_checkpointing=False):
     return model
 
 
+def _log_trainable_parameters(model):
+    """Mirrors peft's own print_trainable_parameters() output format, for a
+    plain (non-peft-wrapped) model -- used on the Full FT path so run logs
+    are consistent across all three conditions."""
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    pct = 100 * trainable / total if total else 0.0
+    print(f"trainable params: {trainable:,} || all params: {total:,} || trainable%: {pct:.4f}")
+
+
+def _freeze_non_backbone_params(model, frozen_module_patterns):
+    """Full FT should only train the language-model transformer backbone,
+    not the full raw checkpoint (audio/vision encoders, speculative drafter,
+    embedder) -- see configs/full_ft.yaml for the rationale. Freezes any
+    parameter whose dotted name contains one of frozen_module_patterns.
+    """
+    for name, param in model.named_parameters():
+        if any(pattern in name for pattern in frozen_module_patterns):
+            param.requires_grad = False
+    _log_trainable_parameters(model)
+    return model
+
+
 def load_model(config):
     model_id = config["model_id"]
     quant_cfg = config.get("quantization", {}) or {}
@@ -84,5 +107,7 @@ def load_model(config):
         peft_config = LoraConfig(**lora_kwargs)
         model = get_peft_model(model, peft_config)
         model.print_trainable_parameters()
+    elif config.get("frozen_modules"):
+        model = _freeze_non_backbone_params(model, config["frozen_modules"])
 
     return model

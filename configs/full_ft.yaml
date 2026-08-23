@@ -1,6 +1,46 @@
-# Condition A -- Full Fine-Tuning. All 2.3B params trainable, A100 40GB.
+# Condition A -- Full Fine-Tuning. A100 40GB.
+#
+# Only the language-model transformer backbone (attention + MLP layers) is
+# trainable -- NOT all 5.1B raw params gemma-4-E2B loads with. The audio
+# encoder, vision encoder, speculative-decoding drafter, and embedder
+# (including Per-Layer Embeddings) are frozen. Rationale (see CHANGES.md,
+# "Change 1", for the full writeup):
+#   1. Google freezes the audio/vision encoders during gemma-4's own
+#      pretraining; GSM8K is text-only, so there's no gradient signal for
+#      them anyway -- training them would just burn memory/compute for
+#      nothing.
+#   2. LoRA/QLoRA (configs/lora.yaml, configs/qlora.yaml) only adapt the
+#      backbone's attention/MLP projections and never touch the embedder --
+#      if Full FT trained the ~2.74B-param embedder too, the study would be
+#      conflating "fine-tuning method" with "training scope", undermining
+#      the accuracy/energy comparison the whole project rests on.
+#   3. Reasoning ability lives in the transformer backbone; GSM8K introduces
+#      no new vocabulary, so there's no reason to touch token embeddings.
+#   4. Keeps Full FT's optimizer-state memory (AdamW moments scale with
+#      *trainable* param count) within an A100 40GB budget instead of
+#      needing an 80GB card for all 5.1B raw params.
 method: full_ft
 model_id: google/gemma-4-E2B
+
+# Substring match against each parameter's full dotted name in
+# model.named_parameters() -- any match freezes that parameter. These are
+# BEST-GUESS prefixes based on common HF naming conventions and the one
+# path confirmed from an actual traceback (`language_model.layers.N...`,
+# which is deliberately NOT listed here since it's the backbone we want
+# trainable). Before the first real Full FT run, verify these against the
+# actual loaded checkpoint:
+#   [n for n, _ in model.named_parameters()]
+# and adjust this list -- no code changes needed, see src/models.py's
+# load_model() for how this list is consumed.
+frozen_modules:
+  - vision_tower
+  - vision_encoder
+  - audio_tower
+  - audio_encoder
+  - drafter
+  - embed_tokens
+  - embedder
+  - per_layer
 
 seed: 42
 epochs: 3
