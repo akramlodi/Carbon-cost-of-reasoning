@@ -9,7 +9,10 @@ its base (non-"-it") counterpart would want, not this checkpoint.
 """
 from datasets import load_dataset
 
-INSTRUCTION = "Question: {question}\nAnswer: Let's think step by step."
+INSTRUCTION = (
+    "Question: {question}\n"
+    "Answer: Let's think step by step. End your response with only: #### <number>"
+)
 
 
 def _user_turn(question):

@@ -109,8 +109,10 @@ pyyaml
 **Prompt template** (chain-of-thought, consistent across all three methods): the instruction text below is sent as a single user turn through the tokenizer's chat template (`google/gemma-4-E2B-it` is instruction-tuned and expects its own turn-formatted input, not a raw completion-style string):
 ```
 Question: {question}
-Answer: Let's think step by step.
+Answer: Let's think step by step. End your response with only: #### <number>
 ```
+The terse-final-answer instruction is deliberate: it gives `extract_final_answer` (`src/evaluate.py`) a reliable anchor instead of falling back to "last number in the text," and it discourages essay-style hedging that was pushing generations past the token budget without ever stating an answer.
+
 Target: an assistant turn containing the reference solution text, ending in the `####` answer marker (see `src/data.py::format_example`, which builds both the eval-time prompt and the training-time full text via `tokenizer.apply_chat_template`).
 
 ---

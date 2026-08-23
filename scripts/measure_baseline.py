@@ -37,7 +37,7 @@ OUT_PATH = "results/baseline_accuracy.json"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_eval_samples", type=int, default=None, help="Subset size; omit for the full 1,319-example test set")
-    parser.add_argument("--max_new_tokens", type=int, default=256)
+    parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--quiet", action="store_true", help="Suppress per-example progress output")
     args = parser.parse_args()
 

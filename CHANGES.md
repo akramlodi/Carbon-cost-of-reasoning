@@ -62,3 +62,19 @@ The base checkpoint isn't instruction-tuned, so a raw completion prompt is close
 
 ### Verification
 `scripts/check_full_ft_scope.py` was rerun against `-it` after the switch (see the Full FT `frozen_modules` scope entry above) — identical results to the base checkpoint, confirming the architecture (and therefore the frozen-scope patterns) is unaffected by the checkpoint swap. The LoRA/QLoRA smoke tests have **not** been rerun since the chat-template change yet — that's the next thing to verify, since it changes the actual token sequences the model trains/evaluates on, unlike the checkpoint swap which didn't.
+
+---
+
+## Change 4: terse final-answer instruction added to the prompt
+
+### Context
+A qualitative check via `scripts/inspect_generations.py` (5 examples) showed every generation cutting off mid-sentence or mid-calculation before stating a final answer ("Final Value = $8", "= 9", "(Total") -- except the two shortest problems, which completed fully and scored correctly. The model was writing essay-style, hedging explanations that ran past the 256-token generation budget before ever reaching an answer.
+
+### Decision
+`INSTRUCTION` in `src/data.py` gained a terse-answer directive: `"...Let's think step by step. End your response with only: #### <number>"`. Since `format_example` builds both the eval-time prompt and the training-time text from the same `INSTRUCTION`, this applies to both -- and for training, the target already naturally complies (GSM8K reference solutions already end in `#### <answer>`), so there's no mismatch introduced between what the model is told to do and what it's shown as the correct target.
+
+### Rationale
+Two effects from one change: (1) gives `extract_final_answer` a reliable anchor to key off instead of falling back to "last number in the text" when generation is truncated mid-calculation, and (2) discourages the essay-style hedging that was consuming the token budget, so more generations reach a stated answer before hitting `max_new_tokens`.
+
+### Impact on prior results
+This invalidates the 50-example zero-shot baseline measured before this change (`results/baseline_accuracy.json`, accuracy 0.10) -- it was measured under the old prompt. Re-run `scripts/measure_baseline.py` (quick 50-sample check first, then the full set) before using a baseline number for real REI calculations. The LoRA/QLoRA smoke tests are similarly stale against this prompt version, on top of already being stale against the chat-template switch in Change 3 -- both should be re-verified together in the next smoke test run rather than separately.
