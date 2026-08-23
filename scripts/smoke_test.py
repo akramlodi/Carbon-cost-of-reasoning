@@ -11,10 +11,17 @@ import argparse
 import os
 import sys
 
+# Must be set before torch initializes CUDA (i.e. before any of the imports
+# below, which pull torch in transitively) to have any effect. Free-tier T4
+# runs this pipeline within a few hundred MB of its 15GB ceiling, so
+# fragmentation-driven OOMs are a real risk even when the true peak usage
+# would otherwise fit.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from peft import PeftModel
-from transformers import Trainer, TrainingArguments
+from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
 
 from src.data import load_gsm8k, tokenize_dataset
 from src.energy_tracker import EnergyRun
@@ -25,6 +32,12 @@ MODEL_ID = "google/gemma-4-E2B"
 N_SMOKE_SAMPLES = 32
 N_SMOKE_STEPS = 10
 N_EVAL_SAMPLES = 8
+# Deliberately short: this is a wiring check, not a real run, and gemma-4's
+# ~262k vocab makes the [batch, seq_len, vocab_size] loss logits tensor the
+# single biggest consumer of headroom on a 15GB T4 -- keeping seq_len small
+# here (on top of dynamic per-batch padding, see src/data.py) is what makes
+# the smoke test fit at all.
+SMOKE_MAX_LENGTH = 256
 
 
 def build_smoke_config(method):
@@ -55,21 +68,24 @@ def run_smoke_test(method="qlora"):
     print("[2/6] Loading + tokenizing a tiny GSM8K subset...")
     train_ds = load_gsm8k("train", n_samples=N_SMOKE_SAMPLES)
     eval_ds = load_gsm8k("test", n_samples=N_EVAL_SAMPLES)
-    tokenized_train = tokenize_dataset(train_ds, tokenizer, max_length=512)
+    tokenized_train = tokenize_dataset(train_ds, tokenizer, max_length=SMOKE_MAX_LENGTH)
 
     print("[3/6] Starting energy tracker...")
     energy = EnergyRun(project_name="green-gap-smoke-test", output_dir="results/emissions")
 
     training_args = TrainingArguments(
         output_dir="smoke_test_output",
-        per_device_train_batch_size=2,
+        per_device_train_batch_size=1,
         max_steps=N_SMOKE_STEPS,
         logging_steps=1,
         save_strategy="no",
         report_to="none",
         bf16=True,
     )
-    trainer = Trainer(model=model, args=training_args, train_dataset=tokenized_train)
+    data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
+    trainer = Trainer(
+        model=model, args=training_args, train_dataset=tokenized_train, data_collator=data_collator
+    )
 
     print(f"[4/6] Running {N_SMOKE_STEPS} training steps...")
     with energy:

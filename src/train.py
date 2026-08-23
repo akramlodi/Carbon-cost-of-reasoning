@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
-from transformers import Trainer, TrainerCallback, TrainingArguments
+from transformers import DataCollatorForLanguageModeling, Trainer, TrainerCallback, TrainingArguments
 
 from src.data import load_gsm8k, tokenize_dataset
 from src.energy_tracker import EnergyRun, read_latest_emissions_row
@@ -112,7 +112,10 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
     tokenized_train = tokenize_dataset(train_ds, tokenizer, config.get("max_seq_length", 512))
 
     training_args = build_training_args(config, run_output_dir)
-    trainer = Trainer(model=model, args=training_args, train_dataset=tokenized_train)
+    data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
+    trainer = Trainer(
+        model=model, args=training_args, train_dataset=tokenized_train, data_collator=data_collator
+    )
 
     energy = EnergyRun(project_name=f"green-gap-{run_id}")
     with energy:

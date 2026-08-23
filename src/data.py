@@ -22,14 +22,16 @@ def load_gsm8k(split="train", n_samples=None):
 
 
 def tokenize_dataset(ds, tokenizer, max_length=512):
+    """Truncates to max_length but does not pad -- padding is left to a
+    per-batch dynamic collator (see src.train.build_data_collator) so short
+    examples don't pay for a full max_length forward pass. That matters here
+    specifically: on a memory-constrained GPU, padding every example out to
+    max_length inflates the [batch, seq_len, vocab_size] logits tensor for
+    the loss computation regardless of actual content length, and gemma-4's
+    ~262k vocab makes that tensor large enough to be the difference between
+    fitting and OOMing.
+    """
     def _tokenize(batch):
-        tokenized = tokenizer(
-            batch["text"],
-            truncation=True,
-            max_length=max_length,
-            padding="max_length",
-        )
-        tokenized["labels"] = [ids.copy() for ids in tokenized["input_ids"]]
-        return tokenized
+        return tokenizer(batch["text"], truncation=True, max_length=max_length)
 
     return ds.map(_tokenize, batched=True, remove_columns=ds.column_names)
