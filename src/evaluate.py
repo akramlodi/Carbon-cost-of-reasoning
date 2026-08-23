@@ -33,7 +33,7 @@ def answers_match(pred, ref, tol=1e-4):
 
 
 @torch.no_grad()
-def generate_answer(model, tokenizer, prompt, max_new_tokens=256):
+def generate_answer(model, tokenizer, prompt, max_new_tokens=768):
     # add_special_tokens=False: prompt already went through the tokenizer's
     # chat template (see src.data.format_example), which embeds BOS/turn
     # tokens itself -- re-adding them here would duplicate BOS.
@@ -48,7 +48,7 @@ def generate_answer(model, tokenizer, prompt, max_new_tokens=256):
     return tokenizer.decode(generated, skip_special_tokens=True)
 
 
-def evaluate_model(model, tokenizer, dataset, max_new_tokens=256, verbose=False):
+def evaluate_model(model, tokenizer, dataset, max_new_tokens=768, verbose=False):
     """Returns (accuracy, per-example records). Temporarily switches the
     model to eval mode and restores the prior mode on exit, so this is safe
     to call mid-training from a checkpoint callback."""

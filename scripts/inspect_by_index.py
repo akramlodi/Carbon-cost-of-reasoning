@@ -18,10 +18,11 @@ Usage -- indices are 1-based, matching measure_baseline.py's "[N] correct=..."
 output, against the SAME --n_eval_samples slice that produced it:
     python scripts/inspect_by_index.py --indices 9,13,14,15,40,42 --n_eval_samples 50
 
-Match --max_new_tokens to whatever produced the run you're auditing
-(measure_baseline.py currently defaults to 256, not the 512 used by
-inspect_generations.py -- check which one actually produced the numbers
-you're looking at before concluding anything).
+--max_new_tokens defaults to 768, matching the project-wide standard used
+by measure_baseline.py, inspect_generations.py, and src/evaluate.py's
+generate_answer/evaluate_model defaults. If you're auditing a run made
+before this was standardized, pass whatever value that run actually used
+instead -- otherwise you're not reproducing its conditions.
 """
 import argparse
 import os
@@ -68,7 +69,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--indices", required=True, help="Comma-separated 1-based positions, e.g. 9,13,14,15,40,42")
     parser.add_argument("--n_eval_samples", type=int, default=50, help="Must match the slice size the run you're auditing used")
-    parser.add_argument("--max_new_tokens", type=int, default=768, help="Must match the run you're auditing (measure_baseline.py defaults to 256)")
+    parser.add_argument("--max_new_tokens", type=int, default=768, help="Match the run you're auditing if it predates the 768 standard")
     parser.add_argument("--split", default="test", choices=["train", "test"])
     args = parser.parse_args()
 
