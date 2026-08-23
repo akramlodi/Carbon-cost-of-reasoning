@@ -1,0 +1,30 @@
+# Condition C -- QLoRA. Base model in 4-bit NF4, L4 (16-24GB).
+# Same adapter config as configs/lora.yaml for direct comparability.
+# Rank ablation (r=8, r=32) is applied at runtime via `--rank`.
+method: qlora
+model_id: google/gemma-4-E2B
+
+seed: 42
+epochs: 3
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 2      # effective batch size 16, matched across conditions
+learning_rate: 2e-4
+max_seq_length: 512
+
+bf16: true
+gradient_checkpointing: false       # prepare_model_for_kbit_training handles this instead
+eval_every_pct: 0.2
+
+output_dir: results/runs/qlora
+
+quantization:
+  enabled: true
+  quant_type: nf4
+  double_quant: true
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]

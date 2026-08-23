@@ -1,0 +1,28 @@
+# Condition B -- LoRA. Base model frozen in bf16, RTX 4090 (24GB) or L4 (24GB).
+# Rank ablation (r=8, r=32) is applied at runtime via `--rank`, not separate
+# config files -- see scripts/run_experiment.py and scripts/run_matrix.sh.
+method: lora
+model_id: google/gemma-4-E2B
+
+seed: 42
+epochs: 3
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 2      # effective batch size 16, matched across conditions
+learning_rate: 2e-4
+max_seq_length: 512
+
+bf16: true
+gradient_checkpointing: false
+eval_every_pct: 0.2
+
+output_dir: results/runs/lora
+
+quantization:
+  enabled: false
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]

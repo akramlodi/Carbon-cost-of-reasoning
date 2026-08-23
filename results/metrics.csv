@@ -1,0 +1,1 @@
+run_id,method,rank,seed,gpu_model,region,wall_clock_s,energy_kwh,co2e_kg,accuracy,baseline_accuracy,delta_accuracy,rei_kwh,rei_co2

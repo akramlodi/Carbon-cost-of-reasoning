@@ -1,0 +1,22 @@
+# Condition A -- Full Fine-Tuning. All 2.3B params trainable, A100 40GB.
+method: full_ft
+model_id: google/gemma-4-E2B
+
+seed: 42
+epochs: 3
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 4      # effective batch size 16, matched across conditions
+learning_rate: 2e-5
+max_seq_length: 512
+
+bf16: true
+gradient_checkpointing: true        # required to control memory for full FT
+eval_every_pct: 0.2                 # log an intermediate checkpoint every 20% of training
+
+output_dir: results/runs/full_ft
+
+quantization:
+  enabled: false
+
+lora:
+  enabled: false

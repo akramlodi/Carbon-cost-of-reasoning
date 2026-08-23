@@ -1,0 +1,13 @@
+transformers>=4.45
+peft>=0.13
+bitsandbytes>=0.44
+accelerate>=1.0
+datasets>=3.0
+trl>=0.11
+codecarbon>=2.5
+torch>=2.4
+pynvml>=11.5
+scikit-learn
+pandas
+matplotlib
+pyyaml

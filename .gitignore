@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+smoke_test_output/
+smoke_test_adapter/
+results/runs/
+results/emissions/*.csv
+!results/emissions/.gitkeep
+results/logs/*.log
+!results/logs/.gitkeep
+
+requirements_lock.txt
+*.egg-info/
+.DS_Store
