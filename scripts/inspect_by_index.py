@@ -68,7 +68,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--indices", required=True, help="Comma-separated 1-based positions, e.g. 9,13,14,15,40,42")
     parser.add_argument("--n_eval_samples", type=int, default=50, help="Must match the slice size the run you're auditing used")
-    parser.add_argument("--max_new_tokens", type=int, default=512, help="Must match the run you're auditing (measure_baseline.py defaults to 256)")
+    parser.add_argument("--max_new_tokens", type=int, default=768, help="Must match the run you're auditing (measure_baseline.py defaults to 256)")
     parser.add_argument("--split", default="test", choices=["train", "test"])
     args = parser.parse_args()
 
