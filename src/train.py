@@ -135,6 +135,8 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
 
     tokenizer = load_tokenizer(config["model_id"])
     model = load_model(config)
+    if torch.cuda.is_available():
+        print(f"Loaded model CUDA memory: {torch.cuda.memory_allocated() / 1e9:.3f} GB")
 
     train_ds = load_gsm8k(tokenizer, "train", n_samples=n_train_samples)
     eval_ds = load_gsm8k(tokenizer, "test", n_samples=n_eval_samples)
