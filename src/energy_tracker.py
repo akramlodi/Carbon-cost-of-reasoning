@@ -12,8 +12,6 @@ import os
 import threading
 import time
 
-from codecarbon import EmissionsTracker
-
 try:
     import pynvml
 
@@ -75,6 +73,8 @@ class EnergyRun:
     """Context manager wrapping CodeCarbon + optional GPU power polling for one run."""
 
     def __init__(self, project_name, output_dir="results/emissions", poll_gpu=True):
+        from codecarbon import EmissionsTracker
+
         os.makedirs(output_dir, exist_ok=True)
         self.output_dir = output_dir
         self.tracker = EmissionsTracker(project_name=project_name, output_dir=output_dir)
@@ -112,14 +112,21 @@ class EnergyRun:
         }
 
 
-def read_latest_emissions_row(output_dir="results/emissions", csv_name="emissions.csv"):
-    """CodeCarbon appends one row per run to output_dir/emissions.csv; this
-    pulls the most recent row so callers can read fields like energy_consumed
-    (kWh) that aren't returned directly by `tracker.stop()`.
+def sum_emissions_for_run(run_id, output_dir="results/emissions", csv_name="emissions.csv"):
+    """Sum CodeCarbon sessions belonging to one run in the shared CSV.
+
+    CodeCarbon writes one row per tracker session. Filtering by project name
+    handles interleaved runs, while summing all matching rows handles resume
+    sessions for the same run.
     """
     path = os.path.join(output_dir, csv_name)
     if not os.path.exists(path):
         return None
-    with open(path) as f:
-        rows = list(csv.DictReader(f))
-    return rows[-1] if rows else None
+    with open(path, newline="") as f:
+        rows = [row for row in csv.DictReader(f) if row.get("project_name") == run_id]
+    if not rows:
+        return None
+    return {
+        "energy_consumed": sum(float(row["energy_consumed"]) for row in rows),
+        "emissions": sum(float(row["emissions"]) for row in rows),
+    }

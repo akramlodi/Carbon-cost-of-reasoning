@@ -5,6 +5,7 @@ evaluations (every `eval_every_pct` of training) that feed the Green Gap
 curve.
 """
 import argparse
+import csv
 import json
 import os
 import random
@@ -13,13 +14,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-import pandas as pd
 import torch
 import yaml
 from transformers import DataCollatorForLanguageModeling, Trainer, TrainerCallback, TrainingArguments
+from transformers.trainer_utils import get_last_checkpoint
 
 from src.data import load_gsm8k, tokenize_dataset
-from src.energy_tracker import EnergyRun, read_latest_emissions_row
+from src.energy_tracker import EnergyRun, sum_emissions_for_run
 from src.evaluate import evaluate_model
 from src.models import load_model, load_tokenizer
 
@@ -41,14 +42,42 @@ class GreenGapCheckpointCallback(TrainerCallback):
     and pairs the resulting accuracy with cumulative energy (from the GPU
     power poller) so we can plot accuracy vs. cumulative energy mid-run."""
 
-    def __init__(self, model, tokenizer, eval_ds, energy_run, eval_every_pct, n_eval_subsample=100):
+    def __init__(
+        self, model, tokenizer, eval_ds, energy_run, eval_every_pct,
+        output_path, n_eval_subsample=100,
+    ):
         self.model = model
         self.tokenizer = tokenizer
         self.eval_ds = eval_ds.select(range(min(n_eval_subsample, len(eval_ds))))
         self.energy_run = energy_run
         self.eval_every_pct = eval_every_pct
-        self.next_threshold = eval_every_pct
-        self.records = []
+        self.output_path = output_path
+        self.records = self._load_records()
+        last_progress = max((float(record["progress"]) for record in self.records), default=0.0)
+        self.next_threshold = last_progress + eval_every_pct
+
+    def _load_records(self):
+        if not os.path.exists(self.output_path):
+            return []
+        with open(self.output_path, newline="") as f:
+            return [
+                {
+                    "step": int(row["step"]),
+                    "progress": float(row["progress"]),
+                    "accuracy": float(row["accuracy"]),
+                    "cumulative_energy_kwh": float(row["cumulative_energy_kwh"]),
+                }
+                for row in csv.DictReader(f)
+            ]
+
+    def _append_record(self, record):
+        write_header = not os.path.exists(self.output_path) or os.path.getsize(self.output_path) == 0
+        with open(self.output_path, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=record.keys())
+            if write_header:
+                writer.writeheader()
+            writer.writerow(record)
+        self.records.append(record)
 
     def on_step_end(self, args, state, control, **kwargs):
         if state.max_steps <= 0:
@@ -59,7 +88,7 @@ class GreenGapCheckpointCallback(TrainerCallback):
             cumulative_kwh = (
                 self.energy_run.poller.energy_kwh_elapsed() if self.energy_run.poller else None
             )
-            self.records.append({
+            self._append_record({
                 "step": state.global_step,
                 "progress": progress,
                 "accuracy": accuracy,
@@ -118,21 +147,27 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
     )
 
     energy = EnergyRun(project_name=f"green-gap-{run_id}")
+    checkpoint_curve_path = os.path.join(run_output_dir, "checkpoint_curve.csv")
     with energy:
         callback = GreenGapCheckpointCallback(
-            model, tokenizer, eval_ds, energy, config.get("eval_every_pct", 0.2)
+            model, tokenizer, eval_ds, energy, config.get("eval_every_pct", 0.2),
+            checkpoint_curve_path,
         )
         trainer.add_callback(callback)
-        trainer.train()
+        last_checkpoint = get_last_checkpoint(run_output_dir)
 
-    if callback.records:
-        pd.DataFrame(callback.records).to_csv(
-            os.path.join(run_output_dir, "checkpoint_curve.csv"), index=False
-        )
+        if last_checkpoint:
+            print(f"Resuming {run_id} from checkpoint: {last_checkpoint}")
+            trainer.train(resume_from_checkpoint=last_checkpoint)
+        else:
+            print(f"Starting fresh run: {run_id}")
+            trainer.train()
 
     accuracy, records = evaluate_model(model, tokenizer, eval_ds)
     energy_summary = energy.summary()
-    emissions_row = read_latest_emissions_row(energy.output_dir)
+    emissions_summary = sum_emissions_for_run(
+        f"green-gap-{run_id}", energy.output_dir
+    )
 
     result = {
         "run_id": run_id,
@@ -140,8 +175,8 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
         "rank": lora_cfg.get("r") if lora_cfg.get("enabled") else None,
         "seed": config["seed"],
         "accuracy": accuracy,
-        "energy_kwh": float(emissions_row["energy_consumed"]) if emissions_row else None,
-        "co2e_kg": energy_summary["emissions_kg"],
+        "energy_kwh": emissions_summary["energy_consumed"] if emissions_summary else None,
+        "co2e_kg": emissions_summary["emissions"] if emissions_summary else None,
         "wall_clock_s": energy_summary["wall_clock_s"],
         "peak_gpu_watts": energy_summary["peak_gpu_watts"],
         "peak_gpu_memory_bytes": (
