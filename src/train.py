@@ -84,7 +84,22 @@ class GreenGapCheckpointCallback(TrainerCallback):
             return control
         progress = state.global_step / state.max_steps
         if progress >= self.next_threshold:
+            if torch.cuda.is_available():
+                print(
+                    f"[MEM BEFORE EVAL] step={state.global_step} "
+                    f"allocated={torch.cuda.memory_allocated() / 1e9:.3f} GB "
+                    f"reserved={torch.cuda.memory_reserved() / 1e9:.3f} GB"
+                )
+
             accuracy, _ = evaluate_model(self.model, self.tokenizer, self.eval_ds)
+
+            if torch.cuda.is_available():
+                print(
+                    f"[MEM AFTER EVAL] step={state.global_step} "
+                    f"allocated={torch.cuda.memory_allocated() / 1e9:.3f} GB "
+                    f"reserved={torch.cuda.memory_reserved() / 1e9:.3f} GB"
+                )
+
             cumulative_kwh = (
                 self.energy_run.poller.energy_kwh_elapsed() if self.energy_run.poller else None
             )
