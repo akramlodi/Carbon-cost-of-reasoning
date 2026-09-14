@@ -1,0 +1,10 @@
+{
+  "model_id": "google/gemma-4-E2B-it",
+  "n_examples": 1319,
+  "accuracy": 0.8877937831690674,
+  "max_new_tokens": 786,
+  "batch_size": 16,
+  "n_truncated": 60,
+  "truncation_rate": 0.045489006823351025,
+  "records_path": "results/baseline_records.jsonl"
+}
