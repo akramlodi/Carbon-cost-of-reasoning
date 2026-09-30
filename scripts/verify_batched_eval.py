@@ -11,7 +11,7 @@ Answers the two questions that can't be answered on CPU, in one run:
 
 Run from the repository root inside tmux, on the g5.xlarge:
 
-    # base model, 32 examples, batch 16
+    # base model, 128 examples per side, batch 16 (the default)
     python scripts/verify_batched_eval.py
 
     # the fine-tuned checkpoint the interrupted run already has on disk
@@ -20,16 +20,58 @@ Run from the repository root inside tmux, on the g5.xlarge:
     python scripts/verify_batched_eval.py \\
       --adapter results/runs/lora/lora_r16_seed1/checkpoint-1404
 
-Exits non-zero if any prediction differs, so it can gate the matrix run.
+--n_examples is hard-gated at 128 because the mismatch rate is the only thing
+--max_mismatch_rate acts on, and a handful of flipped near-tie answers moves that
+rate by several points on a small sample. --allow-small-sample runs below the
+minimum for inspection, but the run then certifies nothing and says so.
+
+Exits non-zero if the sample is too small, if the mismatch rate is above
+--max_mismatch_rate, if batching is slower, or if the batched path is not
+reproducible, so it can gate the matrix run.
 """
 import argparse
 import os
 import sys
 import time
 
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+# The mismatch *rate* is the only thing --max_mismatch_rate acts on, so the sample
+# has to be large enough for that rate to mean something. Two flipped near-tie
+# answers is the expected outcome of correct batching (see CHANGES.md), and on the
+# 16- and 32-example samples that rate read 12.5% and 6.25% respectively -- the
+# sample was moving the answer, not the code. 128 keeps a handful of flips inside
+# the noise band the gate is written against. Raising it further is a judgement
+# call about instance time, not correctness: the gate is here to catch a *systematic*
+# regression, and systematic regressions do not hide at 128.
+MIN_GATE_EXAMPLES = 128
+
+
+def sample_size_gate(n_examples, allow_small_sample):
+    """Reject an under-sized comparison. Returns True if the run may proceed.
+
+    Defined above the torch/transformers/peft imports on purpose: a mistyped
+    --n_examples should be refused before the caller pays for a 5.5 GB model
+    load, and this way it is unit-testable without the GPU dependency stack.
+    """
+    if n_examples >= MIN_GATE_EXAMPLES:
+        return True
+    if not allow_small_sample:
+        print(f"FAIL: --n_examples={n_examples} is below the {MIN_GATE_EXAMPLES}-example minimum.")
+        print("  A couple of flipped near-tie answers dominates a small sample: the same 16")
+        print("  examples measured 12.5% here and 6.25% over 32, and a real 0% sample and a")
+        print("  real 15% sample are not reliably distinguishable under 128. The number is")
+        print("  also the only thing the --max_mismatch_rate gate acts on, so too small a")
+        print("  sample makes that gate meaningless rather than merely noisy.")
+        print(f"  Re-run with --n_examples {MIN_GATE_EXAMPLES} (the default), or pass")
+        print("  --allow-small-sample to inspect behaviour without certifying it.")
+        return False
+    print(f"WARNING: running on {n_examples} examples, below the {MIN_GATE_EXAMPLES}-example")
+    print("  minimum. Any rate reported below is descriptive only and must not be used to")
+    print("  certify the batched path.")
+    return True
+
 
 import torch
 
@@ -67,7 +109,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/lora.yaml", help="Supplies model_id / bf16 / quantization")
     parser.add_argument("--adapter", default=None, help="LoRA adapter dir to load on top of the base model")
-    parser.add_argument("--n_examples", type=int, default=32, help="Examples per side of the comparison")
+    parser.add_argument("--n_examples", type=int, default=MIN_GATE_EXAMPLES,
+                        help=f"Examples per side of the comparison. Must be at least {MIN_GATE_EXAMPLES} "
+                             f"unless --allow-small-sample is passed.")
     parser.add_argument("--start_index", type=int, default=1,
                         help="1-based first test example (measure_baseline.py's indexing)")
     parser.add_argument("--max_new_tokens", type=int, default=768, help="Project-wide standard; keep it at 768")
@@ -77,12 +121,14 @@ def main():
                              "unbatched paths; see Check 1's explanation and "
                              "scripts/diagnose_batched_divergence.py")
     parser.add_argument("--strict", action="store_true", help="Fail on any per-example mismatch, ignoring the rate")
+    parser.add_argument("--allow-small-sample", action="store_true",
+                        help=f"Run below the {MIN_GATE_EXAMPLES}-example minimum. The resulting rate is not a "
+                             f"usable gate -- see the note below on sample size -- so only pass this to inspect "
+                             f"behaviour, never to certify it.")
     args = parser.parse_args()
 
-    if args.n_examples < 64 and not args.strict:
-        print(f"WARNING: --n_examples={args.n_examples} is a small sample; a handful of flipped "
-              f"answers moves the mismatch rate by several points. Use --n_examples 128 before "
-              f"treating the rate as a gate.")
+    if not sample_size_gate(args.n_examples, args.allow_small_sample):
+        return 1
 
     import yaml
 
