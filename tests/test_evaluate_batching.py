@@ -210,6 +210,30 @@ def test_normalize_eos_ids_handles_int_list_and_missing():
     assert normalize_eos_ids(model, StubTokenizer()) == {StubTokenizer.eos_token_id}
 
 
+def test_same_prompt_generates_identically_whatever_its_batch_mates_are():
+    """Compositional consistency: a prompt's generation must not depend on which
+    other rows shared its batch.
+
+    This is the invariant scripts/diagnose_batched_divergence.py Check E is
+    supposed to measure on the real checkpoint. An earlier version of that
+    script compared `window0[i]` against `window1[i]` where window 1 was
+    `prompts[1:]`, so every comparison was between two *different* prompts and
+    its conclusion was meaningless -- hence pinning it down here on CPU, where
+    the stub's generations are known exactly.
+    """
+    tokenizer = StubTokenizer()
+    continuations = [[11, 12], [21, 22], [31, 32]]
+    model = StubCausalLM(script_continuations(tokenizer, continuations))
+    prompts = ["p0w0 p0w1", "p1w0 p1w1 p1w2 p1w3", "p2w0 p2w1 p2w2"]
+
+    together = generate_batch(model, tokenizer, prompts, max_new_tokens=4, eos_token_ids=EOS_IDS)
+    alone = [generate_batch(model, tokenizer, [p], max_new_tokens=4, eos_token_ids=EOS_IDS)[0]
+             for p in prompts]
+
+    assert [r["text"] for r in together] == ["11 12", "21 22", "31 32"]
+    assert together == alone
+
+
 def test_evaluate_model_scores_batched_generation_and_restores_train_mode():
     tokenizer = StubTokenizer()
     model = StubCausalLM(script_continuations(tokenizer, [[11, 12], [21, 22], [31, 32]]))

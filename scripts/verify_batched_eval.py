@@ -73,10 +73,16 @@ def main():
     parser.add_argument("--max_new_tokens", type=int, default=768, help="Project-wide standard; keep it at 768")
     parser.add_argument("--batch_size", type=int, default=EVAL_BATCH_SIZE, help="Back off to 8 or 4 if this OOMs")
     parser.add_argument("--max_mismatch_rate", type=float, default=0.10,
-                        help="Fraction of examples allowed to differ between the batched and unbatched paths; "
-                             "see Check 1's explanation and scripts/diagnose_batched_divergence.py")
+                        help="Fraction of examples whose final ANSWER may differ between the batched and "
+                             "unbatched paths; see Check 1's explanation and "
+                             "scripts/diagnose_batched_divergence.py")
     parser.add_argument("--strict", action="store_true", help="Fail on any per-example mismatch, ignoring the rate")
     args = parser.parse_args()
+
+    if args.n_examples < 64 and not args.strict:
+        print(f"WARNING: --n_examples={args.n_examples} is a small sample; a handful of flipped "
+              f"answers moves the mismatch rate by several points. Use --n_examples 128 before "
+              f"treating the rate as a gate.")
 
     import yaml
 
@@ -134,7 +140,10 @@ def main():
     lost = [m for m in mismatches if m[1]["correct"] and not m[2]["correct"]]
 
     print("\n" + "=" * 72)
-    print("Check 1: batched vs unbatched predictions")
+    print("Check 1: batched vs unbatched final answers (answer-level, not text-level)")
+    print("  Note: the underlying generated text diverges far more often than the")
+    print("  extracted answer does -- one flipped token usually still lands on the same")
+    print("  number. scripts/diagnose_batched_divergence.py reports both rates.")
     for index, reference, batched in mismatches:
         print(f"  differs at 1-based index {index}:")
         print(f"    unbatched: predicted {reference['predicted']} "

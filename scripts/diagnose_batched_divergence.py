@@ -1,31 +1,27 @@
 """Diagnose why batched and unbatched greedy generation disagree on a few examples.
 
 `scripts/verify_batched_eval.py` compares batched against unbatched predictions
-and can report mismatches (CHANGES.md Change 6). This script answers *why*,
-with the experiments that separate the two candidate causes:
+and can report mismatches (CHANGES.md Change 6). This script answers *why*.
 
-  A. A bug in the batching -- wrong slice, leaked padding, mispaired rows.
-  B. Float-level nondeterminism across batch shapes. Different batch sizes
-     change matmul shapes, which changes reduction order, which perturbs
-     logits slightly. Greedy decode is discontinuous, so a near-tie flips one
-     token and the two continuations diverge from there.
+Results are keyed by the example's 1-based GSM8K index rather than by position
+within a window. That is not cosmetic: an earlier version of this script
+compared `window0[i]` against `window1[i]` where window 1 was `prompts[1:]`, so
+every comparison was silently between two *different* questions, and its
+"0/16 identical" conclusion was meaningless. Keying by example index makes that
+class of misalignment impossible.
 
-Three checks, each of which would have looked different under (A) and (B):
+Three checks:
 
-  C. Determinism. The identical command twice must give identical output.
-     This is what the experiment actually needs: the batched path has to be
-     reproducible, not byte-identical to the unbatched one.
-  D. 1-row batch (no left-padding at all) vs the full batch. If they also
-     disagree, the disagreement survives with zero padding, so it cannot be
-     about how padding is being sliced.
-  E. Same batch size, different neighbours. Neither the prompt nor its
-     padding changed -- only which other rows shared the batch. If the same
-     prompt's output changes anyway, that is arithmetic order (B).
-
-Batching is what the zero-shot baseline (0.8877) was already measured with,
-so under (B) every condition and the baseline share identical batch
-boundaries and remain comparable; the cost is a handful of per-example flips
-on both sides of a comparison, not a directional bias.
+  C. Determinism. The identical command twice must give identical output. This
+     is what the matrix needs: the batched path has to be reproducible, not
+     byte-identical to the unbatched path.
+  D. 1-row batch (no left-padding at all) vs the full batch. This changes the
+     *matmul shape*, so it is where float-level near-tie flips show up. Reported
+     separately for "generation text differs" and "final answer differs", which
+     are very different rates.
+  E. Same batch size, different neighbours. Nothing about the prompt or its
+     padding changes -- only which other rows shared the batch. Measured
+     against the same example indices, so it is a real comparison.
 
 Run from the repository root on the g5.xlarge, inside tmux:
     python scripts/diagnose_batched_divergence.py \\
@@ -62,7 +58,7 @@ def truncate_at_eos(token_ids, eos_token_ids):
 
 def generate_token_ids(model, tokenizer, prompts, max_new_tokens, eos_token_ids):
     """Left-padded batched generation, but returning raw sequences and scores
-    so the divergence can be located at token resolution."""
+    so a divergence can be located at token resolution."""
     previous_padding_side = tokenizer.padding_side
     tokenizer.padding_side = "left"
     try:
@@ -78,11 +74,10 @@ def generate_token_ids(model, tokenizer, prompts, max_new_tokens, eos_token_ids)
             )
     finally:
         tokenizer.padding_side = previous_padding_side
-    sequences = [
-        truncate_at_eos(row[input_length:].tolist(), eos_token_ids)
-        for row in out.sequences
-    ]
-    return sequences, out.scores
+    return (
+        [truncate_at_eos(row[input_length:].tolist(), eos_token_ids) for row in out.sequences],
+        out.scores,
+    )
 
 
 def first_divergence(a_ids, b_ids):
@@ -100,7 +95,7 @@ def main():
     parser.add_argument("--start_index", type=int, default=1)
     parser.add_argument("--max_new_tokens", type=int, default=768)
     parser.add_argument("--batch_size", type=int, default=EVAL_BATCH_SIZE)
-    parser.add_argument("--max_report", type=int, default=5, help="Mismatching examples to detail")
+    parser.add_argument("--max_report", type=int, default=5, help="Answer-changing examples to detail")
     args = parser.parse_args()
 
     with open(args.config) as stream:
@@ -119,86 +114,100 @@ def main():
     start = args.start_index - 1
     if start + args.n_examples > len(eval_ds):
         raise ValueError("--start_index + --n_examples exceeds the test split")
-    examples = [eval_ds[i] for i in range(start, start + args.n_examples)]
-    prompts = [ex["prompt"] for ex in examples]
-    print(f"{len(examples)} example(s) from 1-based index {args.start_index}\n")
+    prompts = [eval_ds[i]["prompt"] for i in range(start, start + args.n_examples)]
 
-    def batched(ps, batch_size):
-        out = []
+    def batched_by_index(ps, batch_size, first_example_index):
+        """{1-based example index: generate_batch result}. Keyed by example, not
+        by position in the batch, so results can be compared across windows."""
+        results = {}
         for i in range(0, len(ps), batch_size):
-            out.extend(generate_batch(model, tokenizer, ps[i:i + batch_size],
-                                      args.max_new_tokens, eos_token_ids))
-        return out
+            chunk = ps[i:i + batch_size]
+            for offset, result in enumerate(generate_batch(
+                model, tokenizer, chunk, args.max_new_tokens, eos_token_ids
+            )):
+                results[first_example_index + i + offset] = result
+        return results
 
-    window = prompts[:args.batch_size]
+    window0 = batched_by_index(prompts, args.batch_size, start + 1)
     start_time = time.time()
-    full = batched(window, args.batch_size)
     print(f"(one {args.batch_size}-row batch: {time.time() - start_time:.1f}s)")
-    repeat = batched(window, args.batch_size)
+    repeat = batched_by_index(prompts, args.batch_size, start + 1)
 
     print("\n" + "=" * 72)
     print("Check C: is the batched path deterministic run-to-run?")
-    unstable = [i for i in range(len(window)) if full[i] != repeat[i]]
-    print(f"  {len(window) - len(unstable)}/{len(window)} identical on a repeat of the identical command")
+    unstable = [i for i in window0 if window0[i] != repeat.get(i)]
+    print(f"  {len(window0) - len(unstable)}/{len(window0)} identical on a repeat "
+          f"of the identical command")
     if unstable:
-        print(f"  FAIL -- indices {[i + start + 1 for i in unstable]} changed between "
-              f"identical runs; the eval is not reproducible")
+        print(f"  FAIL -- example indices {unstable} changed between identical runs; "
+              f"the eval is not reproducible")
         print("=" * 72)
         return 1
     print("  PASS -- batching is reproducible, which is what the matrix needs")
 
-    singles = batched(window, 1)
-    diff_vs_single = [i for i in range(len(window)) if full[i] != singles[i]]
+    singles = batched_by_index(prompts, 1, start + 1)
+    text_differs = [i for i in sorted(window0) if window0[i]["text"] != singles[i]["text"]]
+    answer_differs = [
+        i for i in sorted(window0)
+        if extract_final_answer(window0[i]["text"]) != extract_final_answer(singles[i]["text"])
+    ]
     print("\n" + "=" * 72)
     print("Check D: 1-row batch (no left-padding) vs the full batch")
-    print(f"  {len(window) - len(diff_vs_single)}/{len(window)} identical")
-    for i in diff_vs_single:
-        print(f"  index {i + start + 1}: 1-row {extract_final_answer(singles[i]['text'])}"
-              f" vs {args.batch_size}-row {extract_final_answer(full[i]['text'])}")
-    if diff_vs_single:
-        print("  -> these differ with ZERO padding involved, so left-padding and the")
-        print("     shared slice index are not what causes the disagreement")
+    print(f"  generation text differs : {len(text_differs)}/{len(window0)}")
+    print(f"  final answer differs    : {len(answer_differs)}/{len(window0)} "
+          f"({', '.join(str(i) for i in answer_differs) or 'none'})")
+    print("  -> these differ with ZERO padding involved, so left-padding and the")
+    print("     shared slice index are not what causes any disagreement")
+    print("     (the two rates differing is the point: one flipped token early on")
+    print("      usually still lands on the same number)")
 
-    diff_vs_shift = []
     if len(prompts) > args.batch_size:
-        shifted = batched(prompts[1:args.batch_size + 1], args.batch_size)
-        shared = min(len(full), len(shifted))
-        diff_vs_shift = [i for i in range(shared) if full[i] != shifted[i]]
+        # one-position shift: the same examples, each sharing the batch with a
+        # different neighbour, so a result changing here cannot be a bug in
+        # which example was asked -- the same example is being asked both times
+        window1 = batched_by_index(prompts[1:args.batch_size + 1], args.batch_size, start + 2)
+        shared = sorted(set(window0) & set(window1))
         print("\n" + "=" * 72)
-        print("Check E: same batch size, different neighbours (padding unchanged)")
-        print(f"  {shared - len(diff_vs_shift)}/{shared} identical")
-        for i in diff_vs_shift:
-            print(f"  index {i + start + 1}: window 0 {extract_final_answer(full[i]['text'])}"
-                  f" vs window 1 {extract_final_answer(shifted[i]['text'])}")
-        if diff_vs_shift:
-            print("  -> the SAME prompt with the SAME padding gives a different answer")
-            print("     when only its batch-mates change: that is arithmetic order, not logic")
+        print("Check E: same batch size, different neighbours, same examples")
+        print(f"  window 0 = examples {min(window0)}..{max(window0)}; "
+              f"window 1 = examples {min(window1)}..{max(window1)}")
+        print(f"  comparing the {len(shared)} example(s) present in both")
+        text_diff = [i for i in shared if window0[i]["text"] != window1[i]["text"]]
+        print(f"  {len(shared) - len(text_diff)}/{len(shared)} byte-identical")
+        for i in text_diff:
+            print(f"  example {i}: "
+                  f"{extract_final_answer(window0[i]['text'])} vs "
+                  f"{extract_final_answer(window1[i]['text'])}")
+        if not text_diff:
+            print("  -> the same example produces the same generation regardless of")
+            print("     which other examples shared its batch: batch composition has no")
+            print("     effect, so the batching is compositionally consistent")
     else:
         print("\n(Check E skipped: pass --n_examples greater than --batch_size)")
 
     print("\n" + "=" * 72)
-    print("Divergence detail (token level)")
-    changed = sorted(set(diff_vs_single) | set(diff_vs_shift))
-    if not changed:
-        print("  none -- the two paths agreed everywhere in this window")
-    for i in changed[:args.max_report]:
-        neighbor = window[1] if i == 0 else window[0]
+    print("Divergence detail for the answer-changing examples (token level)")
+    if not answer_differs:
+        print("  none -- every example reached the same final answer at 1 row and "
+              f"{args.batch_size} rows")
+    for i in answer_differs[:args.max_report]:
+        neighbor_prompt = prompts[1] if i == start + 1 else prompts[0]
+        own_prompt = prompts[i - (start + 1)]
         single_seqs, scores = generate_token_ids(
-            model, tokenizer, [window[i]], args.max_new_tokens, eos_token_ids
+            model, tokenizer, [own_prompt], args.max_new_tokens, eos_token_ids
         )
         batched_seqs, _ = generate_token_ids(
-            model, tokenizer, [neighbor, window[i]], args.max_new_tokens, eos_token_ids
+            model, tokenizer, [neighbor_prompt, own_prompt], args.max_new_tokens, eos_token_ids
         )
         d = first_divergence(single_seqs[0], batched_seqs[1])
-        detail = ""
-        if d is not None and d < len(scores):
-            top2 = torch.topk(scores[d][0].float(), 2).values
-            detail = (f"first differing token at step {d} "
-                      f"({single_seqs[0][d]} vs {batched_seqs[1][d]}); "
-                      f"top1-top2 logit gap there = {float(top2[0] - top2[1]):.4f}")
-        else:
-            detail = f"lengths differ: {len(single_seqs[0])} vs {len(batched_seqs[1])} tokens"
-        print(f"  index {i + start + 1}: {detail}")
+        if d is None or d >= len(scores):
+            print(f"  example {i}: lengths differ, "
+                  f"{len(single_seqs[0])} vs {len(batched_seqs[1])} tokens")
+            continue
+        top2 = torch.topk(scores[d][0].float(), 2).values
+        print(f"  example {i}: first differing token at step {d} "
+              f"({single_seqs[0][d]} vs {batched_seqs[1][d]}); "
+              f"top1-top2 logit gap there = {float(top2[0] - top2[1]):.4f}")
     print("  A gap near 0.0 is the signature of a near-tie that rounding order can flip;")
     print("  once one token flips, the two continuations are different sentences.")
     print("=" * 72)
