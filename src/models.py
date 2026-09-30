@@ -84,6 +84,12 @@ def load_model(config):
         )
     elif config.get("gradient_checkpointing"):
         model.gradient_checkpointing_enable()
+        # Reentrant checkpointing only backprops inputs that require grad; with
+        # the base model frozen (LoRA path) the bare embeddings output doesn't,
+        # so mark input embeddings to require grad -- otherwise training would
+        # silently stop updating the LoRA adapters. Mirrors _freeze_base_model(),
+        # which already does this for the 4-bit (QLoRA) path.
+        model.enable_input_require_grads()
 
     lora_cfg = config.get("lora", {}) or {}
     if lora_cfg.get("enabled"):

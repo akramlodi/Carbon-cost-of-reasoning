@@ -6,8 +6,11 @@ model_id: google/gemma-4-E2B-it
 
 seed: 42
 epochs: 3
-per_device_train_batch_size: 8
-gradient_accumulation_steps: 2      # effective batch size 16, matched across conditions
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8      # effective batch size 16, matched across conditions
+                                    # (was 8x2 -- 4-bit quantization shrinks the
+                                    # weights but NOT the [batch, seq, 262144] logits
+                                    # tensor, which is the same size here as under LoRA)
 learning_rate: 2e-4
 max_seq_length: 512
 

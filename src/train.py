@@ -13,6 +13,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Must be set before the CUDA caching allocator is first used (any earlier
+# ad-hoc/generate process does the same -- see scripts/measure_baseline.py).
+# Doesn't lower the underlying memory requirement, but removes fragmentation
+# OOMs on top of it. run_matrix.sh -> run_experiment.py -> this module, so a
+# single setdefault here covers the real matrix entrypoint too.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import numpy as np
 import torch
 import yaml
@@ -80,6 +87,13 @@ class GreenGapCheckpointCallback(TrainerCallback):
         self.records.append(record)
 
     def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % 10 == 0 and torch.cuda.is_available():
+            print(
+                f"[MEM] step={state.global_step} "
+                f"allocated={torch.cuda.memory_allocated() / 1e9:.3f} GB "
+                f"reserved={torch.cuda.memory_reserved() / 1e9:.3f} GB "
+                f"peak={torch.cuda.max_memory_allocated() / 1e9:.3f} GB"
+            )
         if state.max_steps <= 0:
             return control
         progress = state.global_step / state.max_steps

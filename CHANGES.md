@@ -78,3 +78,55 @@ Two effects from one change: (1) gives `extract_final_answer` a reliable anchor 
 
 ### Impact on prior results
 This invalidates the 50-example zero-shot baseline measured before this change (`results/baseline_accuracy.json`, accuracy 0.10) -- it was measured under the old prompt. Re-run `scripts/measure_baseline.py` (quick 50-sample check first, then the full set) before using a baseline number for real REI calculations. The LoRA/QLoRA smoke tests are similarly stale against this prompt version, on top of already being stale against the chat-template switch in Change 3 -- both should be re-verified together in the next smoke test run rather than separately.
+
+---
+
+## Change 5: LoRA/QLoRA OOM at step 0 on g5.xlarge (24GB) -- logits-tensor memory
+
+### The failure
+`GG_METHODS=lora,qlora ./scripts/run_matrix.sh` OOM'd on `g5.xlarge` (A10G, ~22GB usable) at step 0 of 1,404, before any training step completed and before the first periodic eval (which wouldn't fire until ~step 281):
+
+```
+File ".../transformers/models/gemma4/modeling_gemma4.py", line 2583, in forward
+    logits = logits / final_logit_softcapping
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.21 GiB.
+GPU 0 has a total capacity of 22.06 GiB, ... this process has 20.90 GiB memory in use.
+```
+
+This was the LoRA config (the first method in the matrix). Distinct from the earlier eval-callback leak -- that code is never reached before crashing here.
+
+### Root cause
+Gemma-4 uses a **262,144-token vocabulary**, so the final logits tensor is `per_device_batch_size × seq_len × 262144`, and the softcapping divide allocates a second copy of it (plus `float32` upcasting in the loss path multiplies the cost by ~2x vs bf16). The traceback's 1.21 GiB allocation is exactly `8 × ~155 × 262144 × 4 bytes` -- i.e. the failing batch was only ~155 tokens long, but already needed 1.2 GiB per fp32 logits copy. On top of ~10.2GB of bf16 weights + the activations of 8-example batches with **gradient checkpointing off**, that exceeded the card.
+
+Two configuration gaps let this through: `configs/lora.yaml` had `per_device_train_batch_size: 8` and `gradient_checkpointing: false`. Neither showed up in the earlier small-scale smoke tests (fewer steps, and the *_E2B* base/draft shrank the visible footprint enough to pass).
+
+### What actually had to change (measured, not guessed)
+1. **`per_device_train_batch_size`: 8 -> 2, `gradient_accumulation_steps`: 2 -> 8** (both `lora.yaml` and `qlora.yaml`). Effective batch stays **16**, matched across all three conditions as before. Because the dataloader walks the same examples in the same order and gradient accumulation sums 8×2 = 2×8 consecutive micro-batches, optimizer steps receive **identical data** -- step count stays essentially unchanged (1,404 with ceil) and comparability across conditions is preserved. This is the direct fix: it divides the logits tensor by 4.
+   - Applied to QLoRA too, even though QLoRA's weights are 4-bit: quantization shrinks the **weights**, not the **activations/logits tensor**, which is byte-identical in size under both methods.
+2. **`gradient_checkpointing: true` in `configs/lora.yaml`** (QLoRA already had it). This was genuinely off in the code path that OOM'd -- the flag was supported by `build_training_args()` but not enabled for LoRA.
+   - Required a companion fix so it actually trains: `src/models.py::load_model` now calls `model.enable_input_require_grads()` on the non-quantized gradient-checkpointing path (the LoRA branch), otherwise reentrant checkpointing sees no input requiring grad and silently stops updating the adapters. The 4-bit/QLoRA path (`_freeze_base_model`) already did this.
+3. **`max_seq_length` (512): NOT changed, and confirmed not the problem.** Measured the real tokenized training set (7,473 examples, exactly as `src/data.py` builds it -- chat template + `INSTRUCTION`): mean 216, p50 203, p90 310, p99 425, max 571. Only 7/7473 (0.09%) exceed 512; reducing to 384 would truncate 2.1% of training targets (and drop the `#### answer` tails -- the very signal being trained). Additionally, `DataCollatorForLanguageModeling` pads only to the **longest example in each batch**, not to `max_seq_length`, so the cap never inflates the logits tensor -- the failing batch was ~155 tokens. Leave it at 512.
+4. **`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`: was missing from the real entrypoint, now set there.** `scripts/measure_baseline.py` (`os.environ.setdefault`) had it, but the training path did not. Added the same `setdefault` at the top of `src/train.py`, before any CUDA use -- this module is the entrypoint behind `scripts/run_experiment.py` and `scripts/run_matrix.sh`, so a single site covers the real matrix. This doesn't fix the underlying requirement; it removes fragmentation OOMs on top of it.
+
+### Diagnostic additions
+`GreenGapCheckpointCallback.on_step_end` now prints `[MEM] allocated/reserved/peak` every 10 steps, so a live run (or an intermediate-scale check) shows whether GPU memory is climbing toward the ceiling rather than discovering it at a crash.
+
+### Intermediate-scale gate before the full matrix
+Do **not** jump from this fix straight to the 1,404-step run. Cheapest meaningful check, larger than the 64-sample smoke test but far cheaper than the matrix:
+
+```
+python -m src.train --config configs/lora.yaml --seed 999 \
+  --n_train_samples 200 --n_eval_samples 32
+```
+
+(200 samples x 3 epochs x effective-16 = ~37 optimizer steps; the `--n_eval_samples 32` matters because the trailing eval in `src/train.py::run` iterates `evaluate_model` one example at a time with `max_new_tokens=768` -- a full 1,319-example eval would add ~1-2 hours to what is nominally a memory check. `python -m src.train` (not `run_experiment.py`) deliberately avoids writing a `results/metrics.csv` row for seed 999, and the seed-999 output dir is never consulted by `run_matrix.sh`'s skip logic for seeds 1-3.)
+
+Watch the `[MEM]` lines: they should plateau well under ~20GB. Only when that passes cleanly, run:
+
+```
+GG_METHODS=lora,qlora GG_BASELINE_ACCURACY=0.8877937831690674 \
+  GG_GPU_MODEL=A10G-24GB GG_REGION=us-east-1 ./scripts/run_matrix.sh
+```
+
+### Applies to `configs/full_ft.yaml` too? (for the g6e.xlarge run later)
+Same findings transfer: full_ft runs `per_device_train_batch_size: 4` on a 48GB L40S today, with `gradient_checkpointing: true` and `max_seq_length: 512` already set. Its bf16 weights (~10.2GB on a 48GB card) leave far more headroom, and its `4 × ~155 × 262144 × 4B ≈ 0.65 GiB` logits copies are only ~1/2 of LoRA's at the same scale -- but the logits math above (and the `enable_input_require_grads` requirement) applies identically if full_ft ever needs batch cooldown. `expandable_segments` is inherited automatically since it's set in `src/train.py`, which full_ft also runs through.

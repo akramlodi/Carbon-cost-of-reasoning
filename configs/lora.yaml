@@ -6,13 +6,18 @@ model_id: google/gemma-4-E2B-it
 
 seed: 42
 epochs: 3
-per_device_train_batch_size: 8
-gradient_accumulation_steps: 2      # effective batch size 16, matched across conditions
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8      # effective batch size 16, matched across conditions
+                                    # (was 8x2 -- reduced per-device batch so the
+                                    # [batch, seq, 262144] fp32 logits tensor + its
+                                    # softcapping copy fit on 24GB; gradient
+                                    # checkpointing must stay on, see below)
 learning_rate: 2e-4
 max_seq_length: 512
 
 bf16: true
-gradient_checkpointing: false
+gradient_checkpointing: true        # OOM'd at step 0 with this off; required to fit
+                                    # on g5.xlarge (24GB) alongside the logits tensor
 eval_every_pct: 0.2
 
 output_dir: results/runs/lora
