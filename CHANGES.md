@@ -130,3 +130,41 @@ GG_METHODS=lora,qlora GG_BASELINE_ACCURACY=0.8877937831690674 \
 
 ### Applies to `configs/full_ft.yaml` too? (for the g6e.xlarge run later)
 Same findings transfer: full_ft runs `per_device_train_batch_size: 4` on a 48GB L40S today, with `gradient_checkpointing: true` and `max_seq_length: 512` already set. Its bf16 weights (~10.2GB on a 48GB card) leave far more headroom, and its `4 × ~155 × 262144 × 4B ≈ 0.65 GiB` logits copies are only ~1/2 of LoRA's at the same scale -- but the logits math above (and the `enable_input_require_grads` requirement) applies identically if full_ft ever needs batch cooldown. `expandable_segments` is inherited automatically since it's set in `src/train.py`, which full_ft also runs through.
+---
+
+## Change 6: `evaluate_model()` batched -- the end-of-run eval was the real cost, not training
+
+### Context
+The first real `run_matrix.sh` run (`configs/lora.yaml`, seed 1) finished all 1,404 training steps, then sat in the trailing `evaluate_model()` call for over an hour at ~30% GPU utilization. `src/evaluate.py::evaluate_model` looped the dataset one example at a time, and the trailing eval in `src/train.py::run` scores all 1,319 GSM8K test examples with `max_new_tokens=768`. Batching is not a micro-optimization here: one example at a time means one decode stream, so the GPU is mostly idle waiting on the per-token Python/launch overhead, and a batch of 16 amortizes that across 16 rows.
+
+This is a per-run tax paid at the end of **every** run in the matrix -- 6 core LoRA/QLoRA runs + 4 rank ablations on g5.xlarge, plus the 3 full_ft runs later on g6e.xlarge -- so the fix moves from "one slow run" to "11 hours across the matrix" (plus 3 more on the L40S).
+
+`scripts/measure_baseline.py` had already hit this exact wall measuring the zero-shot baseline and solved it with a `generate_batch()` helper. Rather than write a second implementation, that helper moved into `src/evaluate.py` and `measure_baseline.py` now imports it, so the baseline measurement and the training-time eval cannot drift apart. `--batch_size` there defaults to `src.evaluate.EVAL_BATCH_SIZE` rather than a second hardcoded 16.
+
+### What changed
+- **`src/evaluate.py::generate_batch()`** (ported from `measure_baseline.py`): left-padded batched generation under `torch.no_grad()`, with per-row EOS scanning. Left-padding is what makes a single shared `input_ids.shape[1]` slice index legal; per-row EOS scanning is still required because `generate()` pads finished rows out to `max_new_tokens`, so a row's real length is not readable from any shared value. `normalize_eos_ids()` moved over too -- Gemma stops on more than one token (`<eos>` and `<end_of_turn>`), so the scan has to test a set, not an int.
+- **`src/evaluate.py::evaluate_model()`**: now iterates the dataset in batches and takes a `batch_size` argument. `generate_answer()` (the unbatched path) is kept deliberately, as the oracle the batched path is tested against.
+- **`padding_side` is set and restored inside `generate_batch`**, not at the call site. The training path shares one tokenizer between eval and the trainer's data collator, so permanently flipping its padding side would left-pad *training* batches too (Gemma computes position ids from a plain `arange`, so that would shift RoPE positions for real tokens).
+
+### Two call sites, two batch sizes
+This is the second time a memory problem has come out of `evaluate_model()` being called mid-training (the first was the missing `no_grad`, fixed earlier), so the batch size is an explicit argument at each call site rather than one shared default:
+
+| Call site | Examples | Batch | Why |
+| --- | --- | --- | --- |
+| `src/train.py::run` (end of run) | 1,319 | `EVAL_BATCH_SIZE` = 16 | Training is over; the same size `measure_baseline.py` measured the baseline at on this exact card. Back off to 8/4 on OOM. |
+| `GreenGapCheckpointCallback` (mid-training) | 100 (`n_eval_subsample`) | `MID_TRAIN_EVAL_BATCH_SIZE` = 4 | Runs against a model that still holds optimizer state and resumes training immediately, on the card where a 262k-vocab logits tensor plus its softcapping copy already OOM'd at `per_device_train_batch_size: 8` (Change 5). |
+
+Under `no_grad` the eval's incremental cost is mostly the KV cache, not activations, so batch 4 is conservative rather than a measured minimum -- but the callback has no headroom to spare and no reason to ask for 16 rows of it. A test asserts the mid-training default stays below the standalone one, so the two can't silently converge.
+
+### Verification
+- [x] **Local, CPU** (`tests/test_evaluate_batching.py`, 9 passed): batched vs. per-example parity, checked two ways. A stub model with a scripted `generate()` pins the semantics the batching depends on (shared slice index under left-padding, per-row EOS length, multi-token EOS set, row ordering, `no_grad`, train-mode restore). A tiny real HF causal LM on the project's real gemma tokenizer checks that batched greedy generation reproduces the unbatched `generate_answer()` text example-for-example across deliberately uneven prompt lengths. Each of those tests was mutation-checked: flipping to right-padding, dropping the per-row EOS scan, dropping `no_grad`, and mispairing examples with generations each fail at least one test.
+- [ ] **GPU, g5.xlarge** -- still required before the matrix, and *not yet run*. `scripts/verify_batched_eval.py` does checks 1 and 2 in one command (real-checkpoint parity against the unbatched path, plus timing both sides and extrapolating to the full 1,319-example eval; exits non-zero on any mismatch or if batching isn't faster):
+  ```
+  python scripts/verify_batched_eval.py \\
+    --adapter results/runs/lora/lora_r16_seed1/checkpoint-1404
+  ```
+  Check 3 is the Change 5 memory gate, re-run because the mid-training eval is now batched rather than one-at-a-time, so its memory profile is genuinely new even though its peak should stay far below the training peak under `no_grad`:
+  ```
+  python -m src.train --config configs/lora.yaml --seed 999 --n_train_samples 200 --n_eval_samples 32
+  ```
+  Confirm `[MEM]` still plateaus across the mid-training evals. (`save_strategy="epoch"` means `checkpoint-1404/adapter_model.safetensors` exists even though the interrupted run never reached `final_adapter_or_model/` -- it's written after the trailing eval.)

@@ -28,7 +28,7 @@ from transformers.trainer_utils import get_last_checkpoint
 
 from src.data import load_gsm8k, tokenize_dataset
 from src.energy_tracker import EnergyRun, sum_emissions_for_run
-from src.evaluate import evaluate_model
+from src.evaluate import EVAL_BATCH_SIZE, MID_TRAIN_EVAL_BATCH_SIZE, evaluate_model
 from src.models import load_model, load_tokenizer
 
 
@@ -51,7 +51,7 @@ class GreenGapCheckpointCallback(TrainerCallback):
 
     def __init__(
         self, model, tokenizer, eval_ds, energy_run, eval_every_pct,
-        output_path, n_eval_subsample=100,
+        output_path, n_eval_subsample=100, eval_batch_size=MID_TRAIN_EVAL_BATCH_SIZE,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -59,6 +59,7 @@ class GreenGapCheckpointCallback(TrainerCallback):
         self.energy_run = energy_run
         self.eval_every_pct = eval_every_pct
         self.output_path = output_path
+        self.eval_batch_size = eval_batch_size
         self.records = self._load_records()
         last_progress = max((float(record["progress"]) for record in self.records), default=0.0)
         self.next_threshold = last_progress + eval_every_pct
@@ -105,7 +106,15 @@ class GreenGapCheckpointCallback(TrainerCallback):
                     f"reserved={torch.cuda.memory_reserved() / 1e9:.3f} GB"
                 )
 
-            accuracy, _ = evaluate_model(self.model, self.tokenizer, self.eval_ds)
+            # eval_batch_size is deliberately smaller than the end-of-run
+            # eval's: this runs with the optimizer state for the next steps
+            # still resident, so the eval has to fit alongside it. Progress
+            # lines are off here because the surrounding [MEM BEFORE/AFTER
+            # EVAL] lines already mark the eval window in the log.
+            accuracy, _ = evaluate_model(
+                self.model, self.tokenizer, self.eval_ds,
+                batch_size=self.eval_batch_size, log_every_n_batches=0,
+            )
 
             if torch.cuda.is_available():
                 print(
@@ -194,7 +203,10 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
             print(f"Starting fresh run: {run_id}")
             trainer.train()
 
-    accuracy, records = evaluate_model(model, tokenizer, eval_ds)
+    # Standalone eval: training is done, so this takes the full batch size
+    # (the same one scripts/measure_baseline.py measured the zero-shot
+    # baseline at) over all 1,319 test examples.
+    accuracy, records = evaluate_model(model, tokenizer, eval_ds, batch_size=EVAL_BATCH_SIZE)
     energy_summary = energy.summary()
     emissions_summary = sum_emissions_for_run(
         f"green-gap-{run_id}", energy.output_dir

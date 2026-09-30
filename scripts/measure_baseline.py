@@ -8,7 +8,11 @@ example at a time -- at ~1 min/example unbatched, a full 1,319-example
 GSM8K run takes ~22 hours, impractical on a billed instance. Designed for
 AWS g5.xlarge (1x A10G, 24GB) running google/gemma-4-E2B-it in bf16
 (~10.2GB model): the constraint there is speed, not memory, so this
-doesn't reach for quantization -- just batching.
+doesn't reach for quantization -- just batching. The batched generation
+itself now lives in src/evaluate.py::generate_batch, shared with the
+training runs' end-of-run eval (which hit the same wall at the end of
+every src/train.py run); --batch_size defaults to that module's
+EVAL_BATCH_SIZE, so the two can't drift apart.
 
 Checkpointed and resumable: each completed example's result is appended to
 --records_path (JSONL, one line per example) as its batch finishes, not
@@ -38,83 +42,19 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import torch
-
 from src.data import load_gsm8k
-from src.evaluate import answers_match, extract_final_answer
+from src.evaluate import (
+    EVAL_BATCH_SIZE,
+    answers_match,
+    extract_final_answer,
+    generate_batch,
+    normalize_eos_ids,
+)
 from src.models import load_model, load_tokenizer
 
 MODEL_ID = "google/gemma-4-E2B-it"
 RECORDS_PATH_DEFAULT = "results/baseline_records.jsonl"
 SUMMARY_PATH = "results/baseline_accuracy.json"
-
-
-def normalize_eos_ids(model, tokenizer):
-    """model.generation_config.eos_token_id can be a single int or a list
-    (Gemma chat models typically stop on more than one valid token, e.g.
-    both <eos> and <end_of_turn>) -- normalize to a set for membership
-    checks. Falls back to the tokenizer's eos_token_id if the generation
-    config doesn't define one."""
-    eos = model.generation_config.eos_token_id
-    if eos is None:
-        eos = tokenizer.eos_token_id
-    if isinstance(eos, int):
-        eos = [eos]
-    return set(eos)
-
-
-@torch.no_grad()
-def generate_batch(model, tokenizer, prompts, max_new_tokens, eos_token_ids):
-    """Batched generation with left-padding.
-
-    Left-padding means every row's real prompt content ends at the same
-    absolute position (input_ids.shape[1]) regardless of how much padding
-    precedes it -- that's the whole mechanism that makes batched
-    decoder-only generation possible, and it's why a single shared slice
-    index (input_length) correctly isolates the generated continuation for
-    every row; right-padding would make that slice point vary per row and
-    silently produce garbage.
-
-    What genuinely does vary per row, and can't be read from a single
-    shared value, is *where each row's own generation actually stopped*.
-    generate() runs the whole batch in lockstep and pads rows that finish
-    early with pad_token_id until every row is done (or max_new_tokens is
-    hit) -- so a row that stopped early still has a slice of length
-    max_new_tokens in the output tensor, just with trailing padding after
-    its real content. We recover the real per-row length and truncation
-    status by scanning each row's generated slice for the first occurrence
-    of any valid eos token: found -> stopped naturally; not found -> that
-    row was still generating when the batch-wide budget ran out.
-    """
-    inputs = tokenizer(
-        prompts, return_tensors="pt", padding=True, add_special_tokens=False
-    ).to(model.device)
-    input_length = inputs["input_ids"].shape[1]
-
-    output_ids = model.generate(
-        **inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=False,
-        pad_token_id=tokenizer.pad_token_id,
-    )
-
-    results = []
-    for row in output_ids:
-        gen_ids = row[input_length:].tolist()
-        eos_pos = next((j for j, t in enumerate(gen_ids) if t in eos_token_ids), None)
-        if eos_pos is not None:
-            n_generated_tokens = eos_pos + 1
-            hit_token_limit = False
-        else:
-            n_generated_tokens = len(gen_ids)
-            hit_token_limit = True
-        text = tokenizer.decode(gen_ids, skip_special_tokens=True)
-        results.append({
-            "text": text,
-            "n_generated_tokens": n_generated_tokens,
-            "hit_token_limit": hit_token_limit,
-        })
-    return results
 
 
 def load_existing_records(records_path):
@@ -181,7 +121,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_eval_samples", type=int, default=None, help="Subset size; omit for the full 1,319-example test set")
     parser.add_argument("--max_new_tokens", type=int, default=768)
-    parser.add_argument("--batch_size", type=int, default=16, help="Back off to 8 or 4 if this OOMs")
+    parser.add_argument("--batch_size", type=int, default=EVAL_BATCH_SIZE, help="Back off to 8 or 4 if this OOMs")
     parser.add_argument("--quiet", action="store_true", help="Suppress per-example progress output")
     parser.add_argument("--records_path", default=RECORDS_PATH_DEFAULT, help="Per-example JSONL checkpoint file")
     parser.add_argument("--restart", action="store_true", help="Wipe --records_path and start over instead of resuming")
