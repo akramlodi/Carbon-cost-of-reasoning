@@ -27,7 +27,7 @@ from transformers import DataCollatorForLanguageModeling, Trainer, TrainerCallba
 from transformers.trainer_utils import get_last_checkpoint
 
 from src.data import load_gsm8k, tokenize_dataset
-from src.energy_tracker import EnergyRun, sum_emissions_for_run
+from src.energy_tracker import EnergyRun, sum_emissions_for_run, summarize_sessions
 from src.evaluate import EVAL_BATCH_SIZE, MID_TRAIN_EVAL_BATCH_SIZE, evaluate_model
 from src.models import load_model, load_tokenizer
 
@@ -186,7 +186,10 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
         model=model, args=training_args, train_dataset=tokenized_train, data_collator=data_collator
     )
 
-    energy = EnergyRun(project_name=f"green-gap-{run_id}")
+    # One line per EnergyRun session, so a crash-and-resume reports wall-clock
+    # and peak power for the whole run rather than only the last session.
+    energy_sessions_path = os.path.join(run_output_dir, "energy_sessions.jsonl")
+    energy = EnergyRun(project_name=f"green-gap-{run_id}", session_log_path=energy_sessions_path)
     checkpoint_curve_path = os.path.join(run_output_dir, "checkpoint_curve.csv")
     with energy:
         callback = GreenGapCheckpointCallback(
@@ -207,7 +210,7 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
     # (the same one scripts/measure_baseline.py measured the zero-shot
     # baseline at) over all 1,319 test examples.
     accuracy, records = evaluate_model(model, tokenizer, eval_ds, batch_size=EVAL_BATCH_SIZE)
-    energy_summary = energy.summary()
+    energy_summary = summarize_sessions(energy_sessions_path) or energy.summary()
     emissions_summary = sum_emissions_for_run(
         f"green-gap-{run_id}", energy.output_dir
     )
@@ -222,8 +225,16 @@ def run(config_path, n_train_samples=None, n_eval_samples=None, seed_override=No
         "co2e_kg": emissions_summary["emissions"] if emissions_summary else None,
         "wall_clock_s": energy_summary["wall_clock_s"],
         "peak_gpu_watts": energy_summary["peak_gpu_watts"],
-        "peak_gpu_memory_bytes": (
-            torch.cuda.max_memory_allocated() if torch.cuda.is_available() else None
+        # Max of earlier sessions (training) and this process (incl. the final eval).
+        "peak_gpu_memory_bytes": max(
+            (
+                v for v in (
+                    energy_summary.get("peak_gpu_memory_bytes"),
+                    torch.cuda.max_memory_allocated() if torch.cuda.is_available() else None,
+                )
+                if v is not None
+            ),
+            default=None,
         ),
     }
 

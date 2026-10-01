@@ -1,249 +1,166 @@
 # The Green Gap: A Sustainability Analysis of Fine-Tuning Methods for Reasoning Models
 
-## Overview
+## What we set out to show
 
-This project measures the environmental cost — energy consumption (kWh) and CO2 emissions — of three fine-tuning methodologies applied to a small reasoning-capable language model, and weighs that cost against the accuracy gained on a multi-step mathematical reasoning benchmark.
+Fine-tuning a language model costs energy and carbon. We wanted to measure whether that cost **buys better reasoning**, and how much each fine-tuning method buys per kWh. Two metrics were defined for this:
 
-**Base model:** `google/gemma-4-E2B-it` (instruction-tuned; 2.3B effective parameters, Apache 2.0)
-**Benchmark:** GSM8K (grade-school math word problems requiring chain-of-thought reasoning)
-**Methods compared:** Full Fine-Tuning, LoRA, QLoRA
+- **Reasoning Efficiency Index (REI):** accuracy gained over the zero-shot base model, per kWh (or per kg CO2e).
+  ```
+  REI = ΔAccuracy (over zero-shot base model) / Energy consumed (kWh)
+  ```
+- **The Green Gap:** the point in training where extra energy stops buying meaningful accuracy, read from accuracy-vs-cumulative-energy curves.
 
-**Core contributions:**
-1. **The Green Gap** — the point in training where marginal accuracy gained per additional kWh drops sharply, i.e. where environmental cost stops buying meaningful reasoning improvement.
-2. **The Reasoning Efficiency Index (REI)** — a standardized metric for comparing fine-tuning methods on environmental efficiency rather than raw accuracy alone.
+The expected result was a positive accuracy gain from fine-tuning, with parameter-efficient methods (LoRA, QLoRA) getting most of the gain for much less energy.
 
-```
-REI = ΔAccuracy (over zero-shot base model) / Energy consumed (kWh)
-```
+## What we found
 
-(A CO2e-denominated variant may also be reported for cross-region comparability, since kWh-to-CO2e conversion depends on local grid carbon intensity.)
+We fine-tuned **`google/gemma-4-E2B-it`** on **GSM8K** with LoRA and QLoRA (3 seeds each at rank 16, plus rank 8 and rank 32 ablations: 10 runs) on an **AWS g5.xlarge** (1× A10G 24 GB, `us-east-1`), measuring energy with CodeCarbon.
+
+**Fine-tuning made the model worse.** The instruction-tuned base model already scores **88.8%** zero-shot. Every fine-tuned model scored **61–66%**.
+
+| Condition | Accuracy | Δ vs baseline | Training energy | CO2e | REI (/kWh) |
+|---|---|---|---|---|---|
+| Zero-shot base model | **88.78%** | — | — | — | — |
+| LoRA r=16 (3 seeds) | 65.55 ± 0.66% | −23.2 pt | 0.27–0.33 kWh | ~0.11 kg | ≈ −0.8 to −0.9 |
+| QLoRA r=16 (3 seeds) | 61.92 ± 0.36% | −26.9 pt | 0.31 kWh | ~0.12 kg | ≈ −0.86 |
+| LoRA r=8 / r=32 | 64.5% / 64.7% | −24 pt | 0.27 kWh | ~0.10 kg | ≈ −0.89 |
+| QLoRA r=8 / r=32 | 60.7% / 61.1% | −28 pt | 0.32 kWh | ~0.12 kg | ≈ −0.88 |
+
+The whole matrix used **2.99 kWh and 1.10 kg CO2e** over 20.7 GPU-hours of training, and lowered accuracy in every run.
+
+**Key findings**
+
+1. **Negative REI everywhere, and the Green Gap is at zero.** By the first checkpoint (20% of training) accuracy was already 30–36 points below the base model on the same questions, and it never recovered. In this setup no amount of energy bought improvement.
+2. **Why: the training data teaches a weaker reasoning style than the model already has.** The base model solves problems with long, self-checking explanations (~1,070 characters). The GSM8K reference solutions are terse (~290 characters) and full of `<<48/2=24>>` calculator markup written for a tool our model doesn't have. Fine-tuning makes the model imitate them. Per question, fine-tuning broke about 350–400 problems the base model got right and fixed only about 40.
+3. **Whether fine-tuning pays off depends on the starting model and the data, not just on the method.** Supervised data whose reasoning style is weaker than the model's own makes it worse, however efficiently the method runs.
+4. **QLoRA is not automatically greener.** On a GPU where LoRA already fits, QLoRA used **16% more energy** and **22% more time** (4-bit weights must be dequantized on every pass) and scored **3.4 points lower**. It only saves energy when its lower memory use lets you move to a smaller GPU.
+5. **Adapter rank (8, 16, 32) made no meaningful difference** to accuracy or energy.
+
+The evaluation was checked as a fair comparison: same prompt, chat template, decoding, batch boundaries and answer extraction for the baseline and every fine-tuned run, on the same 1,319 questions. Full methodology, per-run tables, curves, the data corrections we made and the limitations are in **[EXPERIMENT_REPORT.md](EXPERIMENT_REPORT.md)**.
+
+## Future work
+
+- **Train on the model's own correct answers.** Generate solutions with the base model for the training questions, keep the correct ones, and fine-tune on those, so training reinforces the model's own reasoning style instead of replacing it. The energy for generating the data counts toward that method's REI.
+- **Switch to the non-instruction-tuned base model (`google/gemma-4-E2B`).** It starts far lower, so GSM8K fine-tuning should give a positive gain. This is the classic setting for measuring energy per point gained.
+- Smaller follow-ups: save generated text in eval records to confirm the explanation above directly; compute loss on the answer only; strip calculator markup; try a lower learning rate or a single epoch; run the Full Fine-Tuning condition on an L40S (g6e.xlarge).
 
 ---
 
-## Repository Structure
+## Project status
+
+| Condition | Status |
+|---|---|
+| Zero-shot baseline (`gemma-4-E2B-it`) | Done: 88.78% on the full GSM8K test set |
+| LoRA r=16 × 3 seeds, r=8, r=32 | Done (g5.xlarge) |
+| QLoRA r=16 × 3 seeds, r=8, r=32 | Done (g5.xlarge) |
+| Full Fine-Tuning × 3 seeds | Not run: needs a 48 GB GPU (g6e.xlarge planned) |
+
+Results from the g5.xlarge run are in `results-g5-backup/` (not tracked in git; it holds 2.2 GB of checkpoints).
+
+---
+
+## Repository structure
 
 ```
-green-gap/
-├── README.md
-├── requirements.txt
-├── configs/
-│   ├── full_ft.yaml
-│   ├── lora.yaml
-│   └── qlora.yaml
+├── README.md                 # this summary
+├── EXPERIMENT_REPORT.md      # full report: setup, results, analysis, limitations
+├── CHANGES.md                # pipeline decisions and fixes, with reasoning
+├── energy_fix.md             # energy-accounting fixes for crash/resume
+├── gpu verification.md       # GPU checks run before the matrix
+├── configs/                  # full_ft.yaml, lora.yaml, qlora.yaml
 ├── src/
-│   ├── data.py              # GSM8K loading, prompt formatting, tokenization
-│   ├── train.py             # unified training entrypoint (method selected via config)
-│   ├── models.py            # model/tokenizer loading, LoRA/QLoRA adapter setup
-│   ├── energy_tracker.py    # CodeCarbon/Zeus wrapper, GPU power polling
-│   ├── evaluate.py          # GSM8K exact-match scoring, answer extraction
-│   └── metrics.py           # REI calculation, Green Gap curve generation
+│   ├── data.py               # GSM8K loading, chat-template prompts, tokenization
+│   ├── models.py             # model loading, LoRA/QLoRA adapters, Full FT freezing
+│   ├── train.py              # unified training entrypoint (method chosen by config)
+│   ├── evaluate.py           # batched generation, answer extraction, scoring
+│   ├── energy_tracker.py     # CodeCarbon wrapper, NVML power poller, per-session logs
+│   └── metrics.py            # REI and Green Gap curve calculation
 ├── scripts/
-│   ├── smoke_test.py        # tiny end-to-end run for Colab free-tier T4
-│   ├── run_experiment.py    # full experiment runner (single condition)
-│   └── run_matrix.sh        # loops through the full experiment matrix
-├── notebooks/
-│   └── colab_smoke_test.ipynb
-├── results/
-│   ├── logs/                # per-run training logs
-│   ├── emissions/           # CodeCarbon output CSVs
-│   └── metrics.csv          # aggregated accuracy/energy/CO2/REI per run
-└── analysis/
-    └── plots.py             # accuracy-vs-energy curves, Green Gap visualization
+│   ├── measure_baseline.py   # zero-shot baseline (resumable)
+│   ├── run_experiment.py     # one condition + a metrics.csv row
+│   ├── run_matrix.sh         # the full matrix (GG_METHODS filters by method)
+│   ├── smoke_test.py         # tiny end-to-end run for a Colab T4
+│   └── verify_*.py, diagnose_*.py, inspect_*.py, check_*.py   # one-off verification tools
+├── analysis/plots.py         # accuracy-vs-energy and Green Gap plots
+├── tests/                    # CPU unit tests (batching, energy accounting)
+└── results/                  # live output dir: runs/, emissions/, metrics.csv
 ```
 
 ---
 
-## Environment Setup
+## Method in brief
 
-### Phase 1 — Free Colab (T4, 16GB): pipeline validation only
+- **Data:** `openai/gsm8k` `main`: 7,473 train / 1,319 test.
+- **Prompt:** one user turn through Gemma's chat template:
+  ```
+  Question: {question}
+  Answer: Let's think step by step. End your response with only: #### <number>
+  ```
+  Training target: the GSM8K reference solution as the assistant turn.
+- **Scoring:** numeric exact match on the number after `####`, greedy decoding, `max_new_tokens=768`, batch 16.
+- **Shared training config:** 3 epochs, effective batch 16 (2 × 8 accumulation), LR 2e-4, max length 512, bf16, gradient checkpointing.
+  - LoRA: bf16 frozen base, r=16, α=32, dropout 0.05.
+  - QLoRA: the same adapter on a 4-bit NF4 base.
+  - Full FT (not yet run): backbone only (1.88B of 5.1B params), LR 2e-5.
+- **Energy:** CodeCarbon (GPU + CPU + RAM, regional grid intensity of 0.369 kg CO2e/kWh for us-east-1) wrapped around training, including the mid-training checkpoint evals. The final 1,319-question eval is outside the tracked window. An NVML poller gives cumulative GPU energy at each 20% checkpoint for the Green Gap curve.
 
-Use this phase to confirm the code runs correctly. Do **not** treat any numbers produced here as real results — shared/virtualized GPU time on free Colab is not reliable for energy measurement, and T4 cannot run full fine-tuning at all.
+---
 
-```python
-!pip install -q transformers peft bitsandbytes accelerate datasets codecarbon trl
-```
+## Reproducing
 
-Runs: LoRA ✅, QLoRA ✅, Full FT ❌ (will OOM — expected, not a bug)
-
-### Phase 2 — Rented GPU: measured experiments
-
-Provision a single, fixed-spec instance per condition (RunPod, Lambda Labs, or similar):
-- Full FT → A100 40GB
-- LoRA → RTX 4090 (24GB) or L4 (24GB)
-- QLoRA → L4 (16–24GB)
-
-Keep the exact GPU model, driver version, and CUDA version identical across repeated runs of the same condition — this is a controlled variable in the study and should be reported in the paper.
+### Setup
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
+`peft>=0.19` is required: older versions can't wrap Gemma-4's `Gemma4ClippableLinear`.
 
-## `requirements.txt` (draft)
+### 1. Smoke test (free Colab T4, pipeline check only)
 
-```
-transformers>=4.45
-peft>=0.13
-bitsandbytes>=0.44
-accelerate>=1.0
-datasets>=3.0
-trl>=0.11
-codecarbon>=2.5
-torch>=2.4
-scikit-learn
-pandas
-matplotlib
-pyyaml
-```
-
----
-
-## Data
-
-**Dataset:** `openai/gsm8k` (`main` config) via Hugging Face `datasets`
-- Train split: ~7,473 examples
-- Test split: ~1,319 examples
-- Format: question + step-by-step solution ending in `#### <final_numeric_answer>`
-
-**Prompt template** (chain-of-thought, consistent across all three methods): the instruction text below is sent as a single user turn through the tokenizer's chat template (`google/gemma-4-E2B-it` is instruction-tuned and expects its own turn-formatted input, not a raw completion-style string):
-```
-Question: {question}
-Answer: Let's think step by step. End your response with only: #### <number>
-```
-The terse-final-answer instruction is deliberate: it gives `extract_final_answer` (`src/evaluate.py`) a reliable anchor instead of falling back to "last number in the text," and it discourages essay-style hedging that was pushing generations past the token budget without ever stating an answer.
-
-Target: an assistant turn containing the reference solution text, ending in the `####` answer marker (see `src/data.py::format_example`, which builds both the eval-time prompt and the training-time full text via `tokenizer.apply_chat_template`).
-
----
-
-## Methodology
-
-### Shared training config (held constant across all three methods)
-- Same train/test split, same random seed(s) — recommend 3 seeds per condition
-- Same number of epochs (start with 3; confirm via smoke test that this is a reasonable budget)
-- Same effective batch size (use gradient accumulation to match across memory-constrained vs full FT setups)
-- Same evaluation protocol and prompt template
-- Mixed precision: bf16 throughout
-
-### Condition A — Full Fine-Tuning
-- Only the language-model transformer backbone (attention + MLP layers, ~1.88B params) is trainable. `google/gemma-4-E2B-it` loads as ~5.1B raw parameters, not the "2.3B effective" marketing figure; the gap is the embedder (incl. Per-Layer Embeddings), audio encoder, and vision encoder, all of which are **frozen** for this condition (see `configs/full_ft.yaml`'s `frozen_modules`, verified against the real checkpoint via `scripts/check_full_ft_scope.py` — this checkpoint has no separate speculative-decoding drafter module).
-  - Google freezes the audio/vision encoders during gemma-4's own pretraining, and GSM8K is text-only, so there's no gradient signal for them regardless.
-  - LoRA/QLoRA (Conditions B/C) only adapt backbone attention/MLP projections and never touch the embedder — training the embedder here too would conflate "fine-tuning method" with "training scope" and undermine the cross-method comparison.
-  - Reasoning ability lives in the backbone; GSM8K introduces no new vocabulary.
-  - Keeps optimizer-state memory within an A100 40GB budget instead of needing an 80GB card for all 5.1B raw params.
-- AdamW optimizer, fp32 master weights (or bf16 with loss scaling if memory-constrained)
-- Gradient checkpointing enabled to control memory
-
-### Condition B — LoRA
-- Base model frozen, loaded in bf16
-- Adapter target modules: attention projections (`q_proj`, `k_proj`, `v_proj`, `o_proj`) at minimum; consider adding MLP projections
-- Primary rank: r=16, alpha=32, dropout=0.05
-- Secondary ranks for the Green Gap ablation curve: r=8, r=32
-
-### Condition C — QLoRA
-- Base model loaded in 4-bit NF4 quantization (`bitsandbytes`)
-- Same adapter config as LoRA condition B for direct comparability
-- Same rank ablation (r=8, r=16, r=32)
-
----
-
-## Energy & Carbon Tracking
-
-Wrap every training run (not just the final experiment matrix — the smoke test too, to validate the tracker itself works) with `codecarbon.EmissionsTracker`:
-
-```python
-from codecarbon import EmissionsTracker
-
-tracker = EmissionsTracker(project_name="green-gap", output_dir="results/emissions")
-tracker.start()
-# ... training loop ...
-emissions_kg = tracker.stop()
-```
-
-Log per run:
-- Total energy consumed (kWh) — GPU + CPU + RAM as reported by CodeCarbon
-- Estimated CO2e (kg), using CodeCarbon's regional grid intensity data — **record the region of the rented instance**, since this materially affects CO2e even for identical kWh
-- Wall-clock training time
-- Peak GPU memory (`torch.cuda.max_memory_allocated()`)
-
-Consider cross-checking CodeCarbon's GPU energy numbers against a second tool (e.g. `zeus` from the ML Energy Initiative) on at least one run per condition, since shared-infrastructure energy attribution has known noise — useful for a methods/limitations note in the paper.
-
----
-
-## Evaluation
-
-- Metric: exact-match accuracy on the final numeric answer (parse both prediction and reference for the `####` marker; compare numerically, not as strings, to avoid formatting mismatches like `12` vs `12.0`)
-- Evaluate on the full GSM8K test set (1,319 examples) after training completes
-- Also log accuracy at intermediate checkpoints (e.g. every 20% of training) to construct the Green Gap curve (accuracy vs. cumulative energy)
-
----
-
-## Experiment Matrix
-
-| Condition | Rank | Reps | GPU | Priority |
-|---|---|---|---|---|
-| Full FT | — | 3 | A100 40GB | Core |
-| LoRA | r=16 | 3 | RTX 4090 / L4 | Core |
-| QLoRA | r=16 | 3 | L4 | Core |
-| LoRA | r=8 | 1 | RTX 4090 / L4 | Ablation |
-| LoRA | r=32 | 1 | RTX 4090 / L4 | Ablation |
-| QLoRA | r=8 | 1 | L4 | Ablation |
-| QLoRA | r=32 | 1 | L4 | Ablation |
-
-**Total core runs:** 9 (for statistical variance on the headline comparison)
-**Total ablation runs:** 4 (to plot the Green Gap curve across capacity/rank)
-
-For every run, record: method, rank (if applicable), seed, GPU model, region, wall-clock time, energy (kWh), CO2e (kg), final accuracy, and REI.
-
----
-
-## Smoke Test — Run This First on Free Colab (T4)
-
-**Goal:** confirm the entire pipeline executes without errors, end to end, before spending any money. This is not a real experiment — it uses a tiny data subset and 1 epoch purely to catch bugs (data formatting issues, OOM on the LoRA/QLoRA configs, tokenizer mismatches, CodeCarbon initialization failures, checkpoint saving).
-
-**What this smoke test validates:**
-- [ ] Gemma 4 E2B loads correctly in 4-bit (QLoRA) and bf16 (LoRA) on a T4
-- [ ] GSM8K loads, formats, and tokenizes without errors
-- [ ] LoRA adapter attaches to the correct target modules
-- [ ] Training loop runs for a handful of steps without OOM or NaN loss
-- [ ] CodeCarbon tracker starts, logs, and stops cleanly, producing a CSV
-- [ ] Evaluation script correctly extracts and compares numeric answers
-- [ ] Checkpoints/adapters save and reload correctly
-
-**What this smoke test does NOT validate:** real accuracy numbers, real energy numbers, or full fine-tuning (T4 cannot run it — expect and ignore the OOM if you try).
-
-The actual implementation lives in `scripts/smoke_test.py`, not inline here — it's picked up several fixes since this section was first drafted (chat-template prompting, dynamic per-batch padding, a `peft`-version-driven `target_modules` fix, T4 memory-fragmentation mitigations) that would just go stale if duplicated into this file as a second copy. Run it with:
 ```bash
 python scripts/smoke_test.py --method qlora
 python scripts/smoke_test.py --method lora
 ```
 
-**Expected runtime on free T4:** a few minutes. If this fails, fix it before spending a cent on rented GPU time — every bug caught here saves real money later.
+Numbers from this are not results. Full FT cannot run on a T4.
 
-**Next step after a clean smoke test pass:** repeat the same script structure with the Full FT config (no quantization, no LoRA, all params trainable) on a rented A100, since that path cannot be validated on T4.
+### 2. Zero-shot baseline (GPU)
+
+```bash
+python scripts/measure_baseline.py --n_eval_samples 50 --batch_size 16   # quick check
+python scripts/measure_baseline.py --batch_size 16                      # full set
+```
+
+### 3. Experiment matrix
+
+```bash
+# LoRA + QLoRA on a 24 GB GPU (what we ran, on g5.xlarge)
+GG_METHODS=lora,qlora GG_BASELINE_ACCURACY=0.8877937831690674 \
+  GG_GPU_MODEL=A10G-24GB GG_REGION=us-east-1 ./scripts/run_matrix.sh
+
+# Full FT on a 48 GB GPU (e.g. g6e.xlarge)
+GG_METHODS=full_ft GG_BASELINE_ACCURACY=0.8877937831690674 \
+  GG_GPU_MODEL=L40S-48GB GG_REGION=us-east-1 ./scripts/run_matrix.sh
+```
+
+Completed runs (those with a `result.json`) are skipped, and interrupted runs resume from their last checkpoint. Energy, CO2e, wall-clock time and peak power/memory are all aggregated across resume sessions.
+
+### 4. Tests
+
+```bash
+python -m pytest tests/
+```
 
 ---
 
-## Reproducibility Notes
+## Reproducibility notes
 
-- Fix and record random seeds for data shuffling, weight initialization, and any sampling in generation
-- Report exact library versions (`pip freeze > requirements_lock.txt` after final runs)
-- Report exact GPU model, region, and cloud provider for every run (needed for CO2e reporting)
-- Report Gemma 4 E2B checkpoint/revision hash used
-
----
-
-## Open Questions to Resolve Before Full Matrix Runs
-
-- [ ] Confirm 3 epochs is an appropriate training budget (check via smoke-test-scale loss curves, or a slightly larger pilot run)
-- [ ] Decide whether QLoRA and LoRA should target identical modules for strict comparability, or method-optimal configs
-- [ ] Decide on the CO2e grid-intensity assumption to use if the rented instance's region isn't directly supported by CodeCarbon's database
-- [ ] Decide statistical test for comparing REI across methods (e.g. paired t-test across seeds)
-
----
+- Seeds 1, 2, 3 for the core runs; seed 1 for the ablations.
+- Record the exact GPU model, region and cloud provider for every run (needed for CO2e).
+- After final runs, record library versions with `pip freeze > requirements_lock.txt`.
 
 ## License
 
-Code: TBD (recommend MIT or Apache 2.0 to match Gemma's license)
-Model: Gemma 4 E2B is distributed under Apache 2.0 by Google DeepMind — review the Gemma Terms of Use for any additional prohibited-use restrictions before publishing derived checkpoints.
+Code: TBD (MIT or Apache 2.0 recommended, to match Gemma's license).
+Model: Gemma 4 E2B is distributed under Apache 2.0 by Google DeepMind. Review the Gemma Terms of Use before publishing derived checkpoints.

@@ -5,6 +5,7 @@ venv/
 
 smoke_test_output/
 smoke_test_adapter/
+results-g5-backup/
 results/runs/
 results/emissions/*.csv
 !results/emissions/.gitkeep

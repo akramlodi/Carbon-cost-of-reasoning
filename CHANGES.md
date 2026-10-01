@@ -191,3 +191,18 @@ Four things were checked rather than assumed:
 It also **hard-fails below `--n_examples 128`** (`MIN_GATE_EXAMPLES`), and 128 is now the default. The reason is not caution: the mismatch rate is the only quantity the `--max_mismatch_rate` gate acts on, and a couple of flipped near-tie answers dominates a small sample -- the same 16 examples read 12.5% and the same phenomenon over 32 read 6.25%. A small sample does not make that gate noisy, it makes it meaningless, because a genuinely 0% run and a genuinely 15% run are not reliably distinguishable under 128. `--allow-small-sample` runs below the minimum for inspection, but such a run certifies nothing and says so. The size check is a pure function evaluated before the transformers/peft imports, so a mistyped flag is refused without paying for a 5.5 GB model load.
 
 This gate is a one-time certification of the eval path, not a dependency of the matrix: `scripts/run_matrix.sh` never invokes it, so a stricter sample size costs no instance time during the experiment sweep., and always fails if batching is slower or if the batched path is not reproducible. Per-example disagreement below that rate is reported with the explanation above rather than blocking the matrix. **If a future run shows a mismatch rate well above 10%, or one that moves accuracy consistently in one direction, treat it as a real bug and use `scripts/diagnose_batched_divergence.py` before spending more instance time.**
+
+---
+
+## Change 7: wall-clock / peak power / peak memory aggregated across resume sessions
+
+### Context
+`lora_r16_seed1` (first g5.xlarge matrix run) was interrupted during its then one-at-a-time final eval, and resumed from `checkpoint-1404` after Change 6. Energy and CO2e were correct (summed across CodeCarbon sessions, per energy_fix.md), but `wall_clock_s` (2.24 s), `peak_gpu_watts` (58.7 W) and `peak_gpu_memory_bytes` (10.8 GB) came from the 0.5 s resume session only. energy_fix.md had flagged this as "document rather than fix"; it has now happened, so it is fixed.
+
+### What changed
+- `EnergyRun` takes `session_log_path` and, on exit (including on a crash), appends that session's wall-clock, peak GPU watts and peak GPU memory to `<run_dir>/energy_sessions.jsonl`.
+- `src/train.py` builds `result.json` from `summarize_sessions()`: wall-clock summed, peaks maxed across sessions (peak memory also includes the final eval in the current process).
+- `tests/test_energy_tracker.py` covers the aggregation.
+
+### Data correction
+`results-g5-backup/runs/lora/lora_r16_seed1/result.json` and `results-g5-backup/metrics.csv`: `wall_clock_s` set to 8749.5 (sum of both CodeCarbon session durations); `peak_gpu_watts` and `peak_gpu_memory_bytes` set to null (not recoverable). Originals kept under `correction` in the result.json. This run's energy also includes the pre-Change-6 one-at-a-time mid-training evals (~+0.06 kWh vs seeds 2/3), so it is excluded from energy comparisons in EXPERIMENT_REPORT.md.
