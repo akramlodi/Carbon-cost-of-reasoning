@@ -44,7 +44,7 @@ The whole matrix used **2.99 kWh and 1.10 kg CO2e** over 20.7 GPU-hours of train
 
 ![Base model's own answer vs the GSM8K training target for the same question](docs/figures/fig6_style_mismatch.png)
 
-The evaluation was checked as a fair comparison: same prompt, chat template, decoding, batch boundaries and answer extraction for the baseline and every fine-tuned run, on the same 1,319 questions. Full methodology, per-run tables, curves, the data corrections we made and the limitations are in **[EXPERIMENT_REPORT.md](EXPERIMENT_REPORT.md)**.
+The evaluation was checked as a fair comparison: same prompt, chat template, decoding, batch boundaries and answer extraction for the baseline and every fine-tuned run, on the same 1,319 questions. Full methodology, per-run tables, curves, the data corrections we made and the limitations are in **[EXPERIMENT_REPORT.md](EXPERIMENT_REPORT.md)**. All raw results are publicly available on [Google Drive](https://drive.google.com/drive/folders/17MJQ9oaiT9SHV7Xs1TKLz3OTaFcxpQu3?usp=share_link) for anyone to verify.
 
 ## Future work
 
@@ -63,7 +63,9 @@ The evaluation was checked as a fair comparison: same prompt, chat template, dec
 | QLoRA r=16 × 3 seeds, r=8, r=32 | Done (g5.xlarge) |
 | Full Fine-Tuning × 3 seeds | Not run: needs a 48 GB GPU (g6e.xlarge planned) |
 
-Results from the g5.xlarge run are in `results-g5-backup/` (not tracked in git; it holds 2.2 GB of checkpoints).
+Results from the g5.xlarge run are in `results-g5-backup/`. It isn't tracked in git because it holds 2.2 GB of checkpoints.
+
+**Public results data:** the full `results-g5-backup/` folder is on [Google Drive](https://drive.google.com/drive/folders/17MJQ9oaiT9SHV7Xs1TKLz3OTaFcxpQu3?usp=share_link), open to anyone with the link, so every number here can be checked independently. It contains `metrics.csv`, the raw CodeCarbon `emissions.csv`, and for every run its `result.json`, per-question `eval_records.json`, `checkpoint_curve.csv`, checkpoints and final LoRA/QLoRA adapters. Point `analysis/report_figures.py --results <downloaded folder>` at it to regenerate every figure.
 
 ---
 

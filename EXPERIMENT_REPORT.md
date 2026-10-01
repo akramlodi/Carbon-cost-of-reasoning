@@ -2,7 +2,7 @@
 
 ![Carbon cost of reasoning: energy and emissions on one side of a scale, fewer correct answers on the other](docs/figures/cover.png)
 
-This report gives the full details behind the summary in [README.md](README.md): what we set out to measure, how the pipeline was built and checked, exactly what ran on AWS, what came out, and why. The raw outputs are in `results-g5-backup/`.
+This report gives the full details behind the summary in [README.md](README.md): what we set out to measure, how the pipeline was built and checked, exactly what ran on AWS, what came out, and why. The raw outputs are in `results-g5-backup/`, which is publicly available on [Google Drive](https://drive.google.com/drive/folders/17MJQ9oaiT9SHV7Xs1TKLz3OTaFcxpQu3?usp=share_link) for anyone to check and verify (see §12).
 
 ---
 
@@ -286,6 +286,8 @@ Adapter rank had no measurable effect on energy (LoRA r=8/16/32: 0.275 / 0.269 /
 
 ## 12. Where everything is
 
+**Public data:** the complete `results-g5-backup/` folder is shared on [Google Drive](https://drive.google.com/drive/folders/17MJQ9oaiT9SHV7Xs1TKLz3OTaFcxpQu3?usp=share_link), open to anyone with the link. Download it and run `python analysis/report_figures.py --results <downloaded folder>` to regenerate every figure, or compare `metrics.csv` against the raw `emissions/emissions.csv` and each run's `eval_records.json` to recompute the accuracy, energy and REI figures in this report.
+
 | Path | Contents |
 |---|---|
 | `results-g5-backup/metrics.csv` | One row per run: accuracy, energy, CO2e, REI |
@@ -294,6 +296,6 @@ Adapter rank had no measurable effect on energy (LoRA r=8/16/32: 0.275 / 0.269 /
 | `results-g5-backup/runs/<method>/<run_id>/eval_records.json` | Per-question predictions for the final eval |
 | `results-g5-backup/runs/<method>/<run_id>/checkpoint_curve.csv` | Green Gap curve points |
 | `results-g5-backup/runs/<method>/<run_id>/final_adapter_or_model/` | Final adapters (can be re-evaluated on any GPU) |
-| `results-g5-backup/verify_final2_tmux_output.txt` | Console tail of the last run (`qlora_r32_seed1`) |
+| `verify_final2_tmux_output.txt` (repo root) | Console tail of the last run (`qlora_r32_seed1`) |
 | `baseline_accuracy.json`, `baseline_records.jsonl` | Zero-shot baseline, with generated text |
 | `docs/figures/`, `analysis/report_figures.py` | Figures in this report and the script that regenerates them |
