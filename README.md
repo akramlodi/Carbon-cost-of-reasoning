@@ -1,5 +1,7 @@
 # The Green Gap: A Sustainability Analysis of Fine-Tuning Methods for Reasoning Models
 
+![Carbon cost of reasoning: energy and emissions on one side of a scale, fewer correct answers on the other](docs/figures/cover.png)
+
 ## What we set out to show
 
 Fine-tuning a language model costs energy and carbon. We wanted to measure whether that cost **buys better reasoning**, and how much each fine-tuning method buys per kWh. Two metrics were defined for this:
@@ -20,13 +22,17 @@ We fine-tuned **`google/gemma-4-E2B-it`** on **GSM8K** with LoRA and QLoRA (3 se
 
 | Condition | Accuracy | Δ vs baseline | Training energy | CO2e | REI (/kWh) |
 |---|---|---|---|---|---|
-| Zero-shot base model | **88.78%** | — | — | — | — |
+| Zero-shot base model (reference) | **88.78%** | 0 (reference point) | 0 (no fine-tuning) | 0 | n/a (no training to divide by) |
 | LoRA r=16 (3 seeds) | 65.55 ± 0.66% | −23.2 pt | 0.27–0.33 kWh | ~0.11 kg | ≈ −0.8 to −0.9 |
 | QLoRA r=16 (3 seeds) | 61.92 ± 0.36% | −26.9 pt | 0.31 kWh | ~0.12 kg | ≈ −0.86 |
 | LoRA r=8 / r=32 | 64.5% / 64.7% | −24 pt | 0.27 kWh | ~0.10 kg | ≈ −0.89 |
 | QLoRA r=8 / r=32 | 60.7% / 61.1% | −28 pt | 0.32 kWh | ~0.12 kg | ≈ −0.88 |
 
+![Accuracy of every fine-tuned run against the zero-shot base model](docs/figures/fig1_accuracy_vs_baseline.png)
+
 The whole matrix used **2.99 kWh and 1.10 kg CO2e** over 20.7 GPU-hours of training, and lowered accuracy in every run.
+
+![Accuracy vs training energy per run: every run sits below and to the right of the base model](docs/figures/fig2_accuracy_vs_energy.png)
 
 **Key findings**
 
@@ -35,6 +41,8 @@ The whole matrix used **2.99 kWh and 1.10 kg CO2e** over 20.7 GPU-hours of train
 3. **Whether fine-tuning pays off depends on the starting model and the data, not just on the method.** Supervised data whose reasoning style is weaker than the model's own makes it worse, however efficiently the method runs.
 4. **QLoRA is not automatically greener.** On a GPU where LoRA already fits, QLoRA used **16% more energy** and **22% more time** (4-bit weights must be dequantized on every pass) and scored **3.4 points lower**. It only saves energy when its lower memory use lets you move to a smaller GPU.
 5. **Adapter rank (8, 16, 32) made no meaningful difference** to accuracy or energy.
+
+![Base model's own answer vs the GSM8K training target for the same question](docs/figures/fig6_style_mismatch.png)
 
 The evaluation was checked as a fair comparison: same prompt, chat template, decoding, batch boundaries and answer extraction for the baseline and every fine-tuned run, on the same 1,319 questions. Full methodology, per-run tables, curves, the data corrections we made and the limitations are in **[EXPERIMENT_REPORT.md](EXPERIMENT_REPORT.md)**.
 

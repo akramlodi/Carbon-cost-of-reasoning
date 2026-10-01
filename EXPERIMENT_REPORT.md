@@ -1,5 +1,7 @@
 # The Green Gap: Experiment Report (LoRA / QLoRA on AWS g5.xlarge)
 
+![Carbon cost of reasoning: energy and emissions on one side of a scale, fewer correct answers on the other](docs/figures/cover.png)
+
 This report gives the full details behind the summary in [README.md](README.md): what we set out to measure, how the pipeline was built and checked, exactly what ran on AWS, what came out, and why. The raw outputs are in `results-g5-backup/`.
 
 ---
@@ -135,15 +137,21 @@ All runs ran one after another on one g5.xlarge from 2026-09-30 03:00 to 2026-10
 
 † See §6.4: this run's energy and time include slower, one-at-a-time mid-training evals, so they are not comparable with the others.
 
+![Accuracy of every fine-tuned run against the zero-shot base model](docs/figures/fig1_accuracy_vs_baseline.png)
+
 Total for the 10 runs: **2.99 kWh, 1.10 kg CO2e, 20.7 h** of training. Including the memory-gate runs it is 3.06 kWh. Final evals add about 9 h on top, outside the tracked window.
 
 ### 6.2 Per condition (r=16, 3 seeds, mean ± sd)
 
 | Condition | Accuracy | Δ vs baseline | Energy (kWh) | CO2e (kg) | REI (/kWh) |
 |---|---|---|---|---|---|
-| Zero-shot baseline | 88.78% | — | 0 | 0 | — |
+| Zero-shot baseline | 88.78% | 0 (reference) | 0 | 0 | n/a (no training) |
 | LoRA r=16 | 65.55 ± 0.66% | −23.22 ± 0.66 pt | 0.289 ± 0.035 (0.269 excl. seed 1) | 0.107 ± 0.013 | −0.81 ± 0.11 (−0.87 excl. seed 1) |
 | QLoRA r=16 | 61.92 ± 0.36% | −26.86 ± 0.36 pt | 0.313 ± 0.002 | 0.115 ± 0.001 | −0.86 ± 0.02 |
+
+The baseline row has no Δ or REI because it is the reference point: no training, so no energy to divide by.
+
+![Accuracy vs training energy per run](docs/figures/fig2_accuracy_vs_energy.png)
 
 ### 6.3 Green Gap curves (100-question subset, mean of 5 runs per method; baseline 93% on this subset)
 
@@ -154,6 +162,8 @@ Total for the 10 runs: **2.99 kWh, 1.10 kg CO2e, 20.7 h** of training. Including
 | 60% (step 843) | 63.4% | 0.157 | 63.0% | 0.175 |
 | 80% (step 1124) | 63.8% | 0.208 | 59.2% | 0.233 |
 | 100% (step 1404) | 64.8% | 0.260 | 62.2% | 0.290 |
+
+![Green Gap curve: accuracy vs cumulative GPU energy during training](docs/figures/fig3_green_gap_curve.png)
 
 On a 100-question sample, one question is one point, so the step-to-step wiggle (±5 points between runs) is mostly noise. The signal is the level: **every checkpoint of every run is 26–37 points below the base model's 93% on the same questions, from the first checkpoint onward.**
 
@@ -195,6 +205,8 @@ Supervised fine-tuning does what it is told: it makes the model reproduce this f
 1. **Less reasoning per answer.** The model learns to write about a quarter as much reasoning, which removes the intermediate checking that made the base model accurate.
 2. **Calculator markup without a calculator.** The original GSM8K annotations were written for a tool that computes `<<48/2=24>>` during generation. Our model must produce both sides of each equation itself, so the markup only adds tokens where arithmetic errors can happen.
 
+![Base model's own answer vs the GSM8K training target for the same question](docs/figures/fig6_style_mismatch.png)
+
 The low training loss (~0.8) confirms the model learned to imitate the targets. The imitation itself is what hurts accuracy.
 
 ### 7.3 The evidence
@@ -210,9 +222,11 @@ The low training loss (~0.8) confirms the model learned to imitate the targets. 
   | QLoRA r=8 / r=32 | 398 / 393 | 27 / 28 |
 
   Fine-tuning fixes about 40 questions but breaks about 350–400 that the base model already got right.
+
+  ![Per-question changes against the base model](docs/figures/fig4_question_flips.png)
 - **Rank barely matters.** r=8, 16 and 32 land within about 1.5 points of each other. More adapter capacity does not recover the lost reasoning, which fits a problem with the training data rather than with capacity.
 
-**Caveat.** The final-eval records (`eval_records.json`) store the extracted answer but not the generated text, so we have not directly confirmed that the fine-tuned models write shorter answers. The explanation rests on the training data, the timing of the drop and the per-question pattern above. Saving `generated_text` in the eval records is the first follow-up item (§9).
+**Caveat.** The final-eval records (`eval_records.json`) store the extracted answer but not the generated text, so we have not directly confirmed that the fine-tuned models write shorter answers. The explanation rests on the training data, the timing of the drop and the per-question pattern above. Saving `generated_text` in the eval records is the first follow-up item (§11).
 
 ### 7.4 Secondary factors (likely smaller)
 
@@ -223,7 +237,7 @@ The low training loss (~0.8) confirms the model learned to imitate the targets. 
 
 ## 8. LoRA vs QLoRA
 
-On this hardware, QLoRA is worse on every axis:
+On this hardware, QLoRA is worse on every axis except memory:
 
 | | LoRA r=16 (seeds 2–3) | QLoRA r=16 | QLoRA vs LoRA |
 |---|---|---|---|
@@ -231,6 +245,8 @@ On this hardware, QLoRA is worse on every axis:
 | Training energy | 0.269 kWh | 0.313 kWh | **+16%** |
 | Training time | 1.79 h | 2.18 h | +22% |
 | Peak GPU memory | 14.2 GB | 10.7 GB | −25% |
+
+![QLoRA vs LoRA: accuracy, energy, time and memory](docs/figures/fig5_lora_vs_qlora.png)
 
 QLoRA's 4-bit weights save memory, but each forward and backward pass must dequantize them, which costs time and so energy. Its only advantage, lower memory, did not matter here because LoRA already fit on the 24 GB A10G. **QLoRA is only the greener choice when it lets you use a smaller GPU or a larger batch.** Using it when LoRA already fits costs both energy and accuracy. Average GPU power was nearly the same (130 W vs 138 W), so the extra energy comes from running longer, not from drawing more power.
 
@@ -280,3 +296,4 @@ Adapter rank had no measurable effect on energy (LoRA r=8/16/32: 0.275 / 0.269 /
 | `results-g5-backup/runs/<method>/<run_id>/final_adapter_or_model/` | Final adapters (can be re-evaluated on any GPU) |
 | `results-g5-backup/verify_final2_tmux_output.txt` | Console tail of the last run (`qlora_r32_seed1`) |
 | `baseline_accuracy.json`, `baseline_records.jsonl` | Zero-shot baseline, with generated text |
+| `docs/figures/`, `analysis/report_figures.py` | Figures in this report and the script that regenerates them |
